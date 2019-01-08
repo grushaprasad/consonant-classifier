@@ -18,21 +18,22 @@ parser.add_argument('--modelname', type=str, default='model.pt',
 parser.add_argument('--nlayers', type=int, default=2,
                     help='number of layers')
 
-parser.add_argument('--traindir', type=str, default='./data/train/',
-                    help='directory with training .wav files')
+parser.add_argument('--traindir', type=str, default='./data/64mels/train/',
+                    help='directory with training spectrograms')
 
-parser.add_argument('--testdir', type=str, default='./data/test/',
-                    help='directory with test .wav files')
+parser.add_argument('--testdir', type=str, default='./data/64mels/test/natural/',
+                    help='directory with test spectrograms')
 
 parser.add_argument('--testmodel', type=str, default='NA',
                     help='name of pre-trained model you want to test')
 
+parser.add_argument('--nmels', type=str, default=64,
+                    help='number of mel features')
 args = parser.parse_args()
 
 # DEFINE PARAMETERS
 # Input features
-sequence_length = 23
-input_size = 128  #number of features per time step 
+input_size = int(args.nmels)  #number of features per time step 
 num_classes = 2
 
 #Hyper-parameters
@@ -50,6 +51,9 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 dat = data.Melspectrogram(args.traindir, args.testdir)
 train_data = dat.train
 test_data = dat.test
+sequence_length = dat.max_seq_length
+
+print('Max sequence length: {}'.format(sequence_length))
 
 # Initialize model
 model = model.BiRNN(input_size, hidden_size, num_layers, num_classes).to(device)
@@ -64,7 +68,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 if args.testmodel == 'NA': #i.e. there isn't a pre-trained model
     total_step = len(train_data)
     for epoch in range(num_epochs):
-        for i, (sound, label) in enumerate(train_data):  
+        for i, (sound, label) in enumerate(train_data):
             sound = sound.reshape(1, sequence_length, input_size).to(device) #change this 1 to batch size if I want to implement batches in the future
             label = label.to(device)  #gets the index of the label and writes to to device
 
@@ -82,7 +86,7 @@ if args.testmodel == 'NA': #i.e. there isn't a pre-trained model
                 torch.save(model, f)
 
 
-# TEST
+## TEST
 
 if args.testmodel != 'NA':  #if you want to test a pre-existing model, load the model. 
     with open(args.testmodel, 'rb') as f:
