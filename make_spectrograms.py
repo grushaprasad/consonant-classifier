@@ -23,8 +23,6 @@ def make_spectrogram(wavfile, offset=0.0, duration=None):
     logmelspec = np.log(melspec + eps)
     return logmelspec
 
-
- 
 # make spectrograms for all stop intervals in textgrid
 def make_spectrograms(wavfile, gridfile):
     if gridfile is None:
@@ -83,20 +81,6 @@ if 0:
 
 
 #make spectrograms for all synthetic stimuli
-# if 0:
-#     maindir = '/Users/colin/Dropbox/GrushaSecondProject/StephensHolt2011'
-#     wavfiles = glob.glob(maindir+'/stimuli/CV_stimuli/*/*/*.wav')
-#     results = []
-#     for wavfile in wavfiles:
-#         logmelspec = make_spectrogram(wavfile)
-#         stim = re.sub('.*/', '', wavfile)
-#         stim = re.sub('.wav', '', stim)
-#         results.append((logmelspec, stim))
-
-#     pklfile = maindir+'/dat/CV_stimuli.pkl'
-#     with open(pklfile, 'wb') as f:
-#         pickle.dump(results, f)
-
 
 if 1:
     maindir = './SyntheticDG/wav/'
@@ -132,35 +116,5 @@ if 1:
     pklfile = './SyntheticDG/spectrograms/' + 'SyntheticDG_%s_middle.pkl'%n_mels
     with open(pklfile, 'wb') as f:
             pickle.dump(middle, f)
-
-    # for file in os.listdir(os.fsencode(maindir)):
-    #     filename = maindir + os.fsdecode(file)
-    #     if len(re.findall('\d+', filename)) > 0:  #ignores other files
-    #         filenum = int(re.findall('\d+', filename)[0])
-    #         if filenum < 11:
-    #             lab = 'D'
-    #         else:
-    #             lab = 'G'
-            
-
-    #         logmelspec = make_spectrogram(filename)
-
-    #         if filenum < 6 or filenum > 15:
-    #             ends.append((logmelspec, lab))
-    #         else:
-    #             middle.append((logmelspec, lab))
-
-    #         #results.append((logmelspec, lab))
-
-    # pklfile = './SyntheticDG/spectrograms/' + 'SyntheticDG_%s_ends.pkl'%n_mels
-    # with open(pklfile, 'wb') as f:
-    #         pickle.dump(ends, f)
-
-
-    # pklfile = './SyntheticDG/spectrograms/' + 'SyntheticDG_%s_middle.pkl'%n_mels
-    # with open(pklfile, 'wb') as f:
-    #         pickle.dump(middle, f)
-
-
 
 

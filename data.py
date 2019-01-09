@@ -34,7 +34,6 @@ def get_max_seqlength(dir_list):
     return(max(seq_lens))
 
 
-
 def load_specs(directory):
     specs = []
     labs = []
@@ -51,7 +50,6 @@ def load_specs(directory):
     sd = np.sqrt(np.var(spec_all, 1))
     return([specs, labs, mu, sd])
 
-
 def z_score(specs, mu, sd):
     z_scored = []
     for spec in specs:
@@ -60,15 +58,18 @@ def z_score(specs, mu, sd):
     return(z_scored)
 
 def get_tensor(specs, labs, max_seq_length):
+    tensors_specs = []
+    tensors_labs = []
     tensors = []
     for i,spec in enumerate(specs):
         curr_lab = labs[i]
         num_zeros = max_seq_length - spec.shape[1]
         zeros = np.zeros([spec.shape[0], num_zeros]) 
         zero_padded = np.hstack((spec, zeros))
-        tensors.append([torch.Tensor(zero_padded), torch.LongTensor([lab_to_int[curr_lab]])])
-    return(tensors)
+        tensors_specs.append(torch.Tensor(zero_padded))
+        tensors_labs.append(torch.LongTensor([lab_to_int[curr_lab]]))
 
+    return(tensors_specs, tensors_labs)
 
 
 class Melspectrogram(object):
@@ -78,11 +79,11 @@ class Melspectrogram(object):
 
         train_specs, train_labs, train_mu, train_sd = load_specs(train_path)
         train_z_scored = z_score(train_specs, train_mu, train_sd)
-        self.train = get_tensor(train_z_scored, train_labs, self.max_seq_length)
+        self.train, self.train_labs = get_tensor(train_z_scored, train_labs, self.max_seq_length)
 
         test_specs, test_labs, test_mu, test_sd = load_specs(test_path)
         test_z_scored = z_score(test_specs, train_mu, train_sd) # does this make sense??? Why? 
-        self.test = get_tensor(test_z_scored, test_labs, self.max_seq_length)
+        self.test, self.test_labs = get_tensor(test_z_scored, test_labs, self.max_seq_length)
 
 
 
