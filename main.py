@@ -33,6 +33,9 @@ parser.add_argument('--nmels', type=int, default=64,
 parser.add_argument('--bsz', type=int, default=10,
                     help='batch_size')
 
+parser.add_argument('--zero_or_truncate',type = str, default = 'trunc',
+                    help = 'trunc for truncate, zero for zero pad')
+
 args = parser.parse_args()
 
 # DEFINE PARAMETERS
@@ -71,14 +74,19 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # SETUP
 # Retrieve training and test data
-dat = data.Melspectrogram(args.traindir, args.testdir)
+dat = data.Melspectrogram(args.traindir, args.testdir, args.zero_or_truncate)
 
 train_data = split(dat.train, batch_size)
 train_labs = split(dat.train_labs, batch_size)
 test_data = dat.test
 test_labs = dat.test_labs
 
-sequence_length = dat.max_seq_length
+
+if zero_or_truncate == 'trunc':
+    sequence_length = dat.min_seq_length
+else:
+    sequence_length = dat.max_seq_length
+
 
 print('Max sequence length: {}'.format(sequence_length))
 

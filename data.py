@@ -22,7 +22,7 @@ dir_list = ['./ChodroffWilson2014/spectrograms/64/',
  './SyntheticDG/spectrograms/' ]
 
 
-def get_max_seqlength(dir_list):
+def get_seqlength(dir_list):
     seq_lens = []
     for directory in dir_list:
         files = glob.glob(directory+'/*.pkl')
@@ -31,7 +31,7 @@ def get_max_seqlength(dir_list):
                 data = pickle.load(curr_f)
             for item in data:
                 seq_lens.append(item[0].shape[1])
-    return(max(seq_lens))
+    return(max(seq_lens), min(seq_lens))
 
 
 def load_specs(directory):
@@ -57,41 +57,85 @@ def z_score(specs, mu, sd):
         z_scored.append(z)
     return(z_scored)
 
-def get_tensor(specs, labs, max_seq_length):
+def zero_pad(specs, max_seq_length):
+    num_zeros = max_seq_length - spec.shape[1]
+    zeros = np.zeros([spec.shape[0], num_zeros]) 
+    zero_padded = np.hstack((spec, zeros))
+    return(zero_padded)
+
+def truncate(spec, min_seq_length):
+    return(spec[0:spec.shape[0], 0:min_seq_length]) # take all elements of first dimension and only 0:min_seq_length of second element. 
+
+def get_mu_sd(specs):
+    spec_all = np.concatenate(specs,1)
+    mu = np.mean(spec_all,1)
+    sd = np.sqrt(np.var(spec_all, 1))
+    return(mu,sd)
+
+def make_equal_lengths(specs, min_seq_length = -1, max_seq_length = -1):
+    if min_seq_length != -1:
+        return([truncate(spec, min_seq_length) for spec in specs])
+    elif max_seq_length != -1:
+        return([zero_pad(spec, min_seq_length) for spec in specs])
+    else:
+        raise Exception('Specify min or max seq_length')
+
+
+def get_tensor(specs, labs):
     tensors_specs = []
     tensors_labs = []
     tensors = []
     for i,spec in enumerate(specs):
         curr_lab = labs[i]
-        num_zeros = max_seq_length - spec.shape[1]
-        zeros = np.zeros([spec.shape[0], num_zeros]) 
-        zero_padded = np.hstack((spec, zeros))
-        tensors_specs.append(torch.Tensor(zero_padded))
+        tensors_specs.append(torch.Tensor(spec))
         tensors_labs.append(torch.LongTensor([lab_to_int[curr_lab]]))
 
     return(tensors_specs, tensors_labs)
 
 
 class Melspectrogram(object):
-    def __init__(self, train_path, test_path):
+    def __init__(self, train_path, test_path, zero_or_truncate):
         
-        self.max_seq_length = get_max_seqlength(dir_list) 
+        self.max_seq_length, self.min_seq_length = get_seqlength(dir_list) 
 
-        train_specs, train_labs, train_mu, train_sd = load_specs(train_path)
-        train_z_scored = z_score(train_specs, train_mu, train_sd)
-        self.train, self.train_labs = get_tensor(train_z_scored, train_labs, self.max_seq_length)
+        # z-score first
+        if 0: 
+            train_specs, train_labs, train_mu, train_sd = load_specs(train_path)
+            train_mu, train_sd = get_mu_sd(train_specs)
+            train_z_scored = z_score(train_specs, train_mu, train_sd)
+            if zero_or_truncate == 'trunc':
+                train_equal = make_equal_lengths(train_z_scored, min_seq_length = self.min_seq_length)
+            else: 
+                train_equal = make_equal_lengths(train_z_scored, max_seq_length = self.max_seq_length)
 
-        test_specs, test_labs, test_mu, test_sd = load_specs(test_path)
-        test_z_scored = z_score(test_specs, train_mu, train_sd) # does this make sense??? Why? 
-        self.test, self.test_labs = get_tensor(test_z_scored, test_labs, self.max_seq_length)
+            self.train, self.train_labs = get_tensor(train_equal, train_labs)
 
+            test_specs, test_labs, test_mu, test_sd = load_specs(test_path)
+            test_z_scored = z_score(test_specs, train_mu, train_sd) # does this make sense??? Why? 
+            if zero_or_truncate == 'trunc':
+                test_equal = make_equal_lengths(test_z_scored, min_seq_length = self.min_seq_length)
+            else: 
+                test_equal = make_equal_lengths(test_z_scored, max_seq_length = self.max_seq_length)
+            
+            self.test, self.test_labs = get_tensor(test_equal, test_labs)
 
+        # z-score last
+        else: 
+            train_specs, train_labs, train_mu, train_sd = load_specs(train_path)
+            if zero_or_truncate == 'trunc':
+                train_equal = make_equal_lengths(train_specs, min_seq_length = self.min_seq_length)
+            else: 
+                train_equal = make_equal_lengths(train_specs, max_seq_length = self.max_seq_length)
 
+            train_mu, train_sd = get_mu_sd(train_equal)
+            train_z_scored = z_score(train_equal, train_mu, train_sd)
+            self.train, self.train_labs = get_tensor(train_z_scored, train_labs)
 
+            test_specs, test_labs, test_mu, test_sd = load_specs(test_path)
+            if zero_or_truncate == 'trunc':
+                test_equal = make_equal_lengths(test_specs, min_seq_length = self.min_seq_length)
+            else: 
+                test_equal = make_equal_lengths(test_specs, max_seq_length = self.max_seq_length)
 
-        
-
-
-
-
-
+            test_z_scored = z_score(test_equal, train_mu, train_sd)
+            self.test, self.test_labs = get_tensor(test_z_scored, test_labs)
