@@ -1,5 +1,5 @@
 import librosa, tgt
-import numpy as np
+import numpy as np, math
 import glob, pickle, re, sys
 import os
 
@@ -14,13 +14,23 @@ n_fft       = 512
 hop_length  = int(n_fft/2)
 n_mels      = 128    # librosa default is 128
 eps         = 1.0e-8
+max_dur = 1.16 #seconds as computed by get_max_dur
 
+
+# gets the maximum duration of all 
+
+def add_silence(sound, sr, sound_dur, max_dur):
+    num_zeros = int(math.ceil((max_dur-sound_dur) * sr))
+    return(np.append(sound, num_zeros*[0]))
 
 # make spectrogam from soundfile
 def make_spectrogram(wavfile, offset=0.0, duration=None):
-    snd,sr  = librosa.core.load(wavfile, sr=sr_target, offset=offset, duration=duration)
-    melspec = librosa.feature.melspectrogram(y=snd, sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+    snd,sr  = librosa.core.load(wavfile, sr=sr_target, offset=offset, duration=duration) 
+    dur = librosa.get_duration(y=snd, sr=sr_target)
+    snd_padded = add_silence(snd, sr_target, dur, max_dur)
+    melspec = librosa.feature.melspectrogram(y=snd_padded, sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
     logmelspec = np.log(melspec + eps)
+    
     return logmelspec
 
 # make spectrograms for all stop intervals in textgrid
@@ -53,8 +63,8 @@ def make_spectrograms(wavfile, gridfile):
             stop = stop_interval.text
             vowel = vowel_interval.text
             logmelspec = make_spectrogram(wavfile, start_time, dur)
-            #results.append((logmelspec, syll, stop, vowel))  # [spectrogram, word, consonant, vowel]
-            results.append((logmelspec, stop))
+            results.append((logmelspec, syll, stop, vowel))  # [spectrogram, word, consonant, vowel]
+            #results.append((logmelspec, stop))
             #print (results)
             #sys.exit(0)
  
@@ -62,7 +72,7 @@ def make_spectrograms(wavfile, gridfile):
 
 # make spectrograms for all natural recordings, 
 # grouped by speaker
-if 0:
+if 1:
     maindir = './ChodroffWilson2014'
     gridfiles = glob.glob(maindir+'/textgrid/*.TextGrid')
 
@@ -93,18 +103,22 @@ if 1:
     for f in wavfiles:
         if len(re.findall('\d+', f)) > 0:  #ignores other files
             filenum = int(re.findall('\d+', f)[0])
+            if f[1] == '_':
+                vowel = f[0:1]
+            else:
+                vowel = f[0:2]
+
             if filenum < 11:
                 lab = 'D'
             else:
                 lab = 'G'
             
-
             logmelspec = make_spectrogram(f)
 
             if filenum < 6 or filenum > 15:
-                ends.append((logmelspec, lab))
+                ends.append((logmelspec, 'NA', lab, vowel))
             else:
-                middle.append((logmelspec, lab))
+                middle.append((logmelspec, 'NA', lab, vowel))
 
             #results.append((logmelspec, lab))
 
