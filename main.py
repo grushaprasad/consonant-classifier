@@ -4,6 +4,7 @@ import argparse
 
 import data
 import model
+import random
 
 # PARSE ARGUMENTS
 
@@ -18,10 +19,10 @@ parser.add_argument('--modelpath', type=str, default='./',
 parser.add_argument('--nlayers', type=int, default=2,
                     help='number of layers')
 
-parser.add_argument('--traindir', type=str, default='./data/64mels/train/',
+parser.add_argument('--traindir', type=str, default='./ChodroffWilson2014/spectrograms/64/',
                     help='directory with training spectrograms')
 
-parser.add_argument('--testdir', type=str, default='./data/64mels/test/natural/',
+parser.add_argument('--testdir', type=str, default='./data/64mels/test/synthetic_ends/',
                     help='directory with test spectrograms')
 
 parser.add_argument('--testmodel', type=str, default='NA',
@@ -33,8 +34,17 @@ parser.add_argument('--nmels', type=int, default=64,
 parser.add_argument('--bsz', type=int, default=10,
                     help='batch_size')
 
-parser.add_argument('--zero_or_truncate',type = str, default = 'trunc',
-                    help = 'trunc for truncate, zero for zero pad')
+parser.add_argument('--split_prop', type=float, default=0.8,
+                    help='proportion of training and validation split')
+
+parser.add_argument('--split_method', type=int, default=1,
+                    help='split by person: 1, split by tokens: 0')
+
+parser.add_argument('--epoch_prop', type=float, default=1,
+                    help='Value between 0 and 1. Determins what percent of training data network sees per epoch')
+
+parser.add_argument('--lr', type=float, default=0.001,
+                    help='learning rate')
 
 args = parser.parse_args()
 
@@ -48,24 +58,41 @@ num_epochs = args.epochs
 num_layers = args.nlayers
 batch_size = args.bsz
 hidden_size = 10
-learning_rate = 0.003
+learning_rate = args.lr
 
-
-def batchify(data, bsz):
-    # Work out how cleanly we can divide the dataset into bsz parts.
-    nbatch = data.size(0) // bsz
-    # Trim off any extra elements that wouldn't cleanly fit (remainders).
-    data = data.narrow(0, 0, nbatch * bsz)
-    # Evenly divide the data across the bsz batches.
-    data = data.view(bsz, -1).t().contiguous()
-    return data.to(device)
+#sequence_length = 50
+sequence_length = 10
 
 def split(l, n):
     # modified from: https://stackoverflow.com/questions/2130016/splitting-a-list-into-n-parts-of-approximately-equal-length/37414115
+    #print(len(l), n)
+    #k,m = divmod(len(l), round(len(l)/n))
     k,m = divmod(len(l), round(len(l)/n))
+    #print(k)
     new = [l[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n)]
-    return(new)
+    # print('new', len(new[1]))
+    # return(new)
     #return(a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
+
+def chunks(l, n):
+    # For item i in a range that is a length of l,
+    for i in range(0, len(l), n):
+        # Create an index range for l of n items:
+        yield l[i:i+n]
+
+def get_batch(l, bsz):
+    new = list(chunks(l, bsz))
+    if len(new[-1]) != bsz:
+        new = new[:-1]
+    return(new)
+
+
+def get_random_sample(batched_dat, prop):
+    split_ind = int(prop * len(batched_dat[0]))
+    shuffled = [random.sample(batch, len(batch)) for batch in batched_dat] 
+    subset = [batch[0:split_ind] for batch in shuffled]
+    return(subset)
+
 
 
 # Device configuration 
@@ -74,21 +101,24 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # SETUP
 # Retrieve training and test data
-dat = data.Melspectrogram(args.traindir, args.testdir, args.zero_or_truncate)
+dat = data.Melspectrogram(args.traindir, args.testdir, args.split_prop, args.split_method)
 
-train_data = split(dat.train, batch_size)
-train_labs = split(dat.train_labs, batch_size)
+# print(len(dat.train))
+# print(type(dat.train[0]))
+
+train_data = get_batch(dat.train, batch_size)
+train_labs = get_batch(dat.train_labs, batch_size)
+val_data = dat.val
+val_labs = dat.val_labs
 test_data = dat.test
 test_labs = dat.test_labs
 
+#print(len(train_data[0]))
 
-if zero_or_truncate == 'trunc':
-    sequence_length = dat.min_seq_length
-else:
-    sequence_length = dat.max_seq_length
-
-
-print('Max sequence length: {}'.format(sequence_length))
+subset = get_random_sample(train_data, 0.8)
+# print(len(subset[0]))
+# print(type(subset[0][0]))
+# print(subset[0][0].size())
 
 # Initialize model
 model = model.BiRNN(input_size, hidden_size, num_layers, num_classes).to(device)
@@ -98,11 +128,13 @@ criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
 
-# # TRAINING
+# TRAINING and VALIDATION
 
 if args.testmodel == 'NA': #i.e. there isn't a pre-trained model
+    ## Train
     total_step = len(train_data)
     for epoch in range(num_epochs):
+        subset = get_random_sample(train_data, args.epoch_prop)
         for i,batch in enumerate(train_data):
             grouped = torch.stack(batch)  #combines list of tensors into a dimension
             sound = grouped.reshape(batch_size, sequence_length, input_size).to(device)
@@ -118,10 +150,28 @@ if args.testmodel == 'NA': #i.e. there isn't a pre-trained model
             optimizer.step()
         print ('Epoch [{}/{}], Loss: {:.4f}' .format(epoch+1, num_epochs, loss.item()))
 
-    modelname = args.modelpath + 'model' + str(input_size) + '-' + str(num_epochs) + '-' + str(num_layers) + '-' + str(hidden_size) + '.pt'
+    modelname = args.modelpath + 'model' + str(input_size) + '-' + str(learning_rate) + '-' + str(num_epochs) + '-' +  str(num_layers) + '-' + str(hidden_size) + '.pt'
 
     with open(modelname, 'wb') as f:
                 torch.save(model, f)
+
+    ##  Validate (i.e. test on held out natural speech)
+    with torch.no_grad():
+        correct = 0
+        total = 0
+
+        for i, sound in enumerate(val_data):
+            sound = sound.reshape(1, sequence_length, input_size).to(device) #change this 1 to batch size if I want to implement batches in the future
+            label = val_labs[i].to(device)
+            output = model(sound)
+            _, predicted = torch.max(output.data, 1)
+            total += label.size(0)
+            correct += (predicted == label).sum().item()
+
+        if total != 0:
+            print('Test Accuracy of the model on natural speech {} %'.format(100 * correct / total)) 
+
+
 
 ## TEST
 
@@ -141,4 +191,4 @@ with torch.no_grad():
         total += label.size(0)
         correct += (predicted == label).sum().item()
 
-    print('Test Accuracy of the model {} %'.format(100 * correct / total))
+    print('Test Accuracy of the model on synthetic speech {} %'.format(100 * correct / total))
