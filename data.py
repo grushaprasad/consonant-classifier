@@ -34,9 +34,10 @@ def get_seqlength(dir_list):
     return(max(seq_lens), min(seq_lens))
 
 
-def load_specs(directory):
+def load_specs(directory, test = 0):
     specs = []
     labs = []
+    filenames = []
     for file in os.listdir(os.fsencode(directory)):
         filename = directory +  os.fsdecode(file)
         if filename.endswith(".pkl"):
@@ -47,7 +48,13 @@ def load_specs(directory):
                     specs.append(item[0])
                     #print(item[0].shape)
                     labs.append(item[2])
-    return([specs, labs])
+                    if test == 1:
+                        filenames.append(item[4])
+
+    if test == 1:
+        return([specs, labs, filenames])
+    else:
+        return([specs, labs])
 
 def get_sets(train_path, test_path, split_method, split_proportion):
 
@@ -114,9 +121,9 @@ def get_sets(train_path, test_path, split_method, split_proportion):
     # for item in all_train_labs:
     #     print(item)
 
-    test_specs, test_labs = load_specs(test_path)
+    test_specs, test_labs, test_filenames = load_specs(test_path, test = 1)
 
-    return(train_specs, train_labs, val_specs, val_labs, test_specs, test_labs)
+    return(train_specs, train_labs, val_specs, val_labs, test_specs, test_labs, test_filenames)
 
 
 def z_score(specs, mu, sd):
@@ -142,47 +149,47 @@ def truncate(spec, min_seq_length):
 def get_mu_sd(specs):
     #print(type(specs))
     spec_all = np.concatenate(specs,0)
-    #print(len(spec_all))
-    mu = np.mean(spec_all,0)  # takes mean across filters
-    # print(type(mu))
-    # print(mu.shape)
-    # for item in mu:
-    #     print(item)
+    # print(type(spec_all[0]))
+    # print(spec_all) 
+    # spec_all[spec_all == 0] = np.nan  #replace 0 with nan
+    # spec_all = np.ma.array(spec_all, mask=np.isnan(spec_all)) #mask nan --ignored when taking mean. 
+
+    mu = np.mean(spec_all,0)  
    
 
     sd = np.sqrt(np.var(spec_all, 0))
     return(mu,sd)
 
-# def make_equal_lengths(specs, min_seq_length = -1, max_seq_length = -1):
-#     if min_seq_length != -1:
-#         return([truncate(spec, min_seq_length) for spec in specs])
-#     elif max_seq_length != -1:
-#         return([zero_pad(spec, max_seq_length) for spec in specs])
-#     else:
-#         raise Exception('Specify min or max seq_length')
 
 
-def get_tensor(specs, labs):
+def get_tensor(specs, labs, filenames = 0):
     tensors_specs = []
     tensors_labs = []
-    tensors = []
+    tensors_filenames = []
     for i,spec in enumerate(specs):
         curr_lab = labs[i]
         tensors_specs.append(torch.Tensor(spec))
-        # print(curr_lab)
-        # print('hello')
         tensors_labs.append(torch.LongTensor([lab_to_int[curr_lab]]))
+        if filenames != 0:
+            tensors_filenames.append(filenames[i])  #not a tensor
 
-    return(tensors_specs, tensors_labs)
+
+
+    if filenames == 0: 
+        return(tensors_specs, tensors_labs)
+    else:
+        return(tensors_specs, tensors_labs, tensors_filenames)
 
 
 class Melspectrogram(object):
     def __init__(self, train_path, test_path, split_proportion, split_method):
         
-        train_specs, train_labs, val_specs, val_labs, test_specs, test_labs = get_sets(train_path, test_path, split_method, split_proportion)
+        train_specs, train_labs, val_specs, val_labs, test_specs, test_labs, test_filenames = get_sets(train_path, test_path, split_method, split_proportion)
         
+        # train_mu, train_sd = get_mu_sd(train_specs)
+        # train_z_scored = z_score(train_specs, train_mu, train_sd)
+
         train_truncated = [truncate(spec, 10) for spec in train_specs]
-        #print(train_truncated[0].shape)
         train_mu, train_sd = get_mu_sd(train_truncated)
         train_z_scored = z_score(train_truncated, train_mu, train_sd)
 
@@ -190,21 +197,26 @@ class Melspectrogram(object):
        
 
         # get val data 
+        # val_z_scored = z_score(val_specs, train_mu, train_sd)
         val_truncated = [truncate(spec, 10) for spec in val_specs]
         val_z_scored = z_score(val_truncated, train_mu, train_sd)         
         self.val, self.val_labs = get_tensor(val_z_scored, val_labs)
 
         # get test data
+        # test_z_scored = z_score(test_specs, train_mu, train_sd)
         test_truncated = [truncate(spec, 10) for spec in test_specs]
         test_z_scored = z_score(test_truncated, train_mu, train_sd)       
-        self.test, self.test_labs = get_tensor(test_z_scored, test_labs)
+        self.test, self.test_labs, self.test_filenames = get_tensor(test_z_scored, test_labs, test_filenames)
 
 
 
 # all_train_dir = './ChodroffWilson2014/spectrograms/128/'
 # test_dir = './SyntheticDG/spectrograms/'
 
-# train_specs, train_labs, val_specs, val_labs, test_specs, test_labs = get_sets(all_train_dir, test_dir,  0, 0.8)
+# train_specs, train_labs, val_specs, val_labs, test_specs, test_labs, test_filenames = get_sets(all_train_dir, test_dir,  0, 0.8)
+# train_mu, train_sd = get_mu_sd(train_specs)
+
+#print(train_mu)
 
 # print(len(train_specs))
 # print(len(val_specs))

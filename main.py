@@ -5,6 +5,7 @@ import argparse
 import data
 import model
 import random
+import re
 
 # PARSE ARGUMENTS
 
@@ -22,7 +23,7 @@ parser.add_argument('--nlayers', type=int, default=2,
 parser.add_argument('--traindir', type=str, default='./ChodroffWilson2014/spectrograms/64/',
                     help='directory with training spectrograms')
 
-parser.add_argument('--testdir', type=str, default='./data/64mels/test/synthetic_ends/',
+parser.add_argument('--testdir', type=str, default='./data/64mels/test/synthetic/',
                     help='directory with test spectrograms')
 
 parser.add_argument('--testmodel', type=str, default='NA',
@@ -65,14 +66,9 @@ sequence_length = 10
 
 def split(l, n):
     # modified from: https://stackoverflow.com/questions/2130016/splitting-a-list-into-n-parts-of-approximately-equal-length/37414115
-    #print(len(l), n)
-    #k,m = divmod(len(l), round(len(l)/n))
     k,m = divmod(len(l), round(len(l)/n))
-    #print(k)
     new = [l[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n)]
-    # print('new', len(new[1]))
-    # return(new)
-    #return(a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n))
+    return(new)
 
 def chunks(l, n):
     # For item i in a range that is a length of l,
@@ -112,13 +108,9 @@ val_data = dat.val
 val_labs = dat.val_labs
 test_data = dat.test
 test_labs = dat.test_labs
+test_filenames = dat.test_filenames
 
 #print(len(train_data[0]))
-
-subset = get_random_sample(train_data, 0.8)
-# print(len(subset[0]))
-# print(type(subset[0][0]))
-# print(subset[0][0].size())
 
 # Initialize model
 model = model.BiRNN(input_size, hidden_size, num_layers, num_classes).to(device)
@@ -182,13 +174,44 @@ if args.testmodel != 'NA':  #if you want to test a pre-existing model, load the 
 with torch.no_grad():
     correct = 0
     total = 0
+    filenum_dict = dict((el, []) for el in range(1,21))
+    probs_dict = {0: [], 1: []}
 
     for i, sound in enumerate(test_data):
         sound = sound.reshape(1, sequence_length, input_size).to(device) #change this 1 to batch size if I want to implement batches in the future
         label = test_labs[i].to(device)
         output = model(sound)
-        _, predicted = torch.max(output.data, 1)
-        total += label.size(0)
-        correct += (predicted == label).sum().item()
+        filenum = int(re.findall('\d+', test_filenames[i])[0])
+        
+        sm = torch.nn.Softmax()
+        probs = sm(output)
+        prob, lab = torch.topk(probs, 2)
+        if int(lab[0][0]) == 0:
+            probs_dict[0].append(round(float(prob[0][0]), 3))
+            probs_dict[1].append(round(float(prob[0][1]), 3))
+            filenum_dict[filenum].append(round(float(prob[0][0]), 3))  # appends the prob of D
+        else:
+            probs_dict[1].append(round(float(prob[0][0]), 3))
+            probs_dict[0].append(round(float(prob[0][1]), 3))
+            filenum_dict[filenum].append(round(float(prob[0][1]), 3)) # appends the prob of D
 
-    print('Test Accuracy of the model on synthetic speech {} %'.format(100 * correct / total))
+
+    for i, item in enumerate(probs_dict[0]):
+        print(item, test_filenames[i])
+        if (i+1)%20 == 0:
+            print('-------------------')
+        if (i+1)%80 == 0:
+            print('#####################################')
+
+    # for key in filenum_dict:  # Print by filenum
+    #     for item in filenum_dict[key]:
+    #         print(item)
+    #     print('----------')
+
+
+        #Uncomment in order to get a prediction and accuracy. 
+    #     _, predicted = torch.max(output.data, 1)
+    #     total += label.size(0)
+    #     correct += (predicted == label).sum().item()
+
+    # print('Test Accuracy of the model on synthetic speech {} %'.format(100 * correct / total))
