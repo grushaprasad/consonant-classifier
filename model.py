@@ -12,15 +12,22 @@ class BiRNN(nn.Module):
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, bidirectional=True)
         self.fc = nn.Linear(hidden_size*2, num_classes)  # 2 for bidirection
     
-    def forward(self, x):
+    def forward(self, x, seq_length):
+        # Pack output
+        packed = torch.nn.utils.rnn.pack_padded_sequence(x, batch_first=True, lengths = seq_length)
+        
         # Set initial states
         h0 = torch.zeros(self.num_layers*2, x.size(0), self.hidden_size).to(device) # 2 for bidirection 
         c0 = torch.zeros(self.num_layers*2, x.size(0), self.hidden_size).to(device)
         
         # Forward propagate LSTM
-        out, _ = self.lstm(x, (h0, c0))  # out: tensor of shape (batch_size, seq_length, hidden_size*2)
-        
-        # Decode the hidden state of the last time step
-        out = self.fc(out[:, -1, :])  
-        return out
+        packed_out, _ = self.lstm(packed, (h0, c0))
 
+        # Unpack output
+        out, _ = torch.nn.utils.rnn.pad_packed_sequence(packed_out, batch_first = True)
+
+        #print(out.shape)
+        # Decode the hidden state of the last time step
+        out = self.fc(out[:, -1, :])   # is this doing the right thing?? Should I get non
+
+        return out

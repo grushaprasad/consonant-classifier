@@ -6,6 +6,7 @@ import torch
 import os
 import numpy as np
 import random
+import torch.nn.utils.rnn as rnn_utils
 
 
 lab_to_int = {
@@ -18,9 +19,38 @@ power = 2.0
 
 
 train = []
-dir_list = ['./ChodroffWilson2014/spectrograms/64/',
- './ChodroffWilson2014/spectrograms/128/',
- './SyntheticDG/spectrograms/' ]
+
+
+class Spec:
+    def __init__(self,vals, seq_lens, labs, filenames):
+        self.vals = vals
+        self.seq_lens = seq_lens
+        self.labs = labs
+        self.filenames = filenames
+
+        a = np.concatenate(self.vals, 1)
+        a[a==0] = np.nan
+        self.mu = np.nanmean(a,1)  
+        self.sd = np.nanstd(a,1)
+
+
+    def zscore(self, mu, sd):
+        z_scored = []
+        mu = mu[:,None]
+        sd = sd[:,None]
+        for val in self.vals:
+            z = ((val - mu) / sd).T
+            z_scored.append(z)
+        self.zscored = z_scored
+
+
+
+def get_mu_sd(specs):
+    spec_all = np.concatenate(specs,1)
+    mu = np.mean(spec_all,1) 
+   
+    sd = np.sqrt(np.var(spec_all, 1))
+    return(mu,sd)
 
 def get_seqlength(dir_list):
     seq_lens = []
@@ -30,136 +60,128 @@ def get_seqlength(dir_list):
             with open(f, 'rb') as curr_f:
                 data = pickle.load(curr_f)
             for item in data:
-                seq_lens.append(item[0].shape[1])
+                seq_lens.append(item[1].shape[1])
     return(max(seq_lens), min(seq_lens))
 
 
-def load_specs(directory, test = 0):
+def spectral_subtraction(spec, adaptor, alpha):  #function taken from Colin (sigproc.py)
+    # print(type(spec))
+    # print(type(adaptor))
+    # print(type(alpha))
+    spec, adaptor = np.exp(spec), np.exp(adaptor)
+    spec_out = spec - alpha * adaptor
+
+    #print(type(spec_out))
+
+    spec_out = np.maximum(spec_out, 0.01*spec)
+    spec_out = np.maximum(spec_out, 1.0e-8)
+    spec_out = np.log(spec_out) 
+    #print('adaptor', type(spec_out))
+
+    return(spec_out)
+
+def zero_pad(spec, max_seq_length):
+    num_zeros = max_seq_length - spec.shape[1]
+    zeros = np.zeros([spec.shape[0], num_zeros]) 
+    zero_padded = np.hstack((spec, zeros))
+    return(zero_padded)
+
+
+
+
+def load_specs(names_file, adaptor = None, alpha = None):
     specs = []
     labs = []
     filenames = []
-    for file in os.listdir(os.fsencode(directory)):
-        filename = directory +  os.fsdecode(file)
-        if filename.endswith(".pkl"):
-            with open(filename, 'rb') as f:
-                #print(filename)
-                data = pickle.load(f)
-                for item in data:
-                    specs.append(item[0])
-                    #print(item[0].shape)
-                    labs.append(item[2])
-                    if test == 1:
-                        filenames.append(item[4])
+    with open(names_file) as f:
+        files = f.read().splitlines()
 
-    if test == 1:
-        return([specs, labs, filenames])
-    else:
-        return([specs, labs])
+    for f in files:
+        with open(f, 'rb') as f:
+            data = pickle.load(f)
+            for item in data:  #len of item should be 6
+                labs.append(item[3])
+                filenames.append(item[0])
+                
+                if adaptor != None:
+                    curr_spec = spectral_subtraction(item[1], adaptor, alpha)
+                    #print('adaptor',type(adaptor))
+                    #print('curr_spec', type(curr_spec))
+                else:
+                    curr_spec = item[1]
+                specs.append(curr_spec)
 
-def get_sets(train_path, test_path, split_method, split_proportion):
+    seq_length = [len(spec[0]) for spec in specs] #the length of spec will be same for every filter
+    max_len = max(seq_length)
 
-    all_train_specs, all_train_labs = load_specs(train_path)
+    specs = [zero_pad(spec, max_len) for spec in specs]
 
-    for item in all_train_labs:
-        if item != 'D' and item != 'G':
-            print('weird label before shuffling')
+    # Shuffle training
+    everything = list(zip(specs, seq_length, labs, filenames))
+    random.shuffle(everything)
+    specs, seq_length, labs, filenames = zip(*everything)
 
-    all_train = list(zip(all_train_specs, all_train_labs))
-    random.shuffle(all_train)
-    all_train_specs, all_train_labs = zip(*all_train)
-    for item in all_train_labs:
-        if item != 'D' and item != 'G':
-            print('weird label after shuffling')
+    spec = Spec(specs,seq_length, labs, filenames)
+
+    return(spec)
+
+
+
+def get_adaptor(adaptor_file):
+    with open(adaptor_file, 'rb') as f:
+        data = pickle.load(f)
+    #print(data.shape)
+    
+    adaptor = np.mean(data, 1)   # this will change depending on the kind of averaging
+    adaptor = adaptor[:,None]
+    return(adaptor)
+
+
+
+def get_sets(train_path, test_path, split_method, split_proportion, adaptor_file = None, alpha = 0.01):
+
+    all_train = load_specs(train_path)
 
     if split_method == 1:  #i.e by person
-        split_ind = int(split_proportion * len(all_train))
+        split_ind = int(split_proportion * len(all_train.vals))
 
-        train_specs = all_train_specs[0:split_ind]
-        train_labs = all_train_labs[0:split_ind]
+        train_specs = all_train.vals[0:split_ind]
+        train_seq_lens = all_train.seq_lens[0:split_ind]
+        train_labs = all_train.labs[0:split_ind]
+        train_files = all_train.filenames[0:split_ind]
 
-        val_specs = all_train_specs[split_ind:]
-        val_labs = all_train_labs[split_ind:]
+        val_specs = all_train.vals[split_ind:]
+        val_seq_lens = all_train.seq_lens[split_ind:]
+        val_labs = all_train.labs[split_ind:]
+        val_files = all_train.filenames[split_ind:]
 
-    else:
-
-        # each person has approx 100 words. So take words 1:80, 100:180 etc ..
-        r = range(len(all_train_specs))
+    else: # each person has approx 100 words. So take words 1:80, 100:180 etc
+        r = range(len(all_train.vals))
         train_inds = [ind for ind in r if ind % 100 < split_proportion*100]
         val_inds = [ind for ind in r if ind % 100 >= split_proportion*100]
 
-        train_specs = [all_train_specs[i] for i in train_inds]
-        train_labs = [all_train_labs[i] for i in train_inds]
+        train_specs = [all_train.vals[i] for i in train_inds]
+        train_seq_lens = [all_train.seq_lens[i] for i in train_inds]
+        train_labs = [all_train.labs[i] for i in train_inds]
+        train_files = [all_train.filenames[i] for i in train_inds]
 
-        val_specs = [all_train_specs[i] for i in val_inds]
-        val_labs = [all_train_labs[i] for i in val_inds]
+        val_specs = [all_train.vals[i] for i in val_inds]
+        val_seq_lens = [all_train.seq_lens[i] for i in val_inds]
+        val_labs = [all_train.labs[i] for i in val_inds]
+        val_files = [all_train.filenames[i] for i in val_inds]
 
-
-        # Divide all_train into speakers. Then from each speaker take some proportion. 
-        # split_ind = int(split_proportion * len(all_train_specs[1])) #assumes all speakers will have roughly equal observations
-        
-        # print(all_train_specs[1].shape)
-
-        # train_specs = [x[0:split_ind] for x in all_train_specs]
-        # #train_labs = [x[0:split_ind] for x in all_train_labs]
-        # train_labs = [x for x in all_train_labs[0:split_ind]]
-        # #train_labs = 
-
-        # val_specs = [x[split_ind:] for x in all_train_specs]
-        # #val_labs = [x[split_ind:] for x in all_train_labs]
-        # val_labs = [x for x in all_train_labs[split_ind:]]
-
-    # print(len(val_labs))
-    # print(len(train_labs))
-    # print(split_proportion)
-    # # print(len(all_train_labs))
-    # # print(type(all_train_labs[0]))
-    # for item in val_labs:
-    #     #print(item)
-    #     if item != 'D' and item != 'G':
-    #         print('weird label after shuffling')
-
-    # for item in all_train_labs:
-    #     print(item)
-
-    test_specs, test_labs, test_filenames = load_specs(test_path, test = 1)
-
-    return(train_specs, train_labs, val_specs, val_labs, test_specs, test_labs, test_filenames)
+    train = Spec(train_specs, train_seq_lens, train_labs, train_files)
+    val = Spec(val_specs, val_seq_lens, val_labs, val_files)
 
 
-def z_score(specs, mu, sd):
-    print('__________________')
-    z_scored = []
-    for spec in specs:
-        # print(spec.T.shape)
-        # print('mu', mu.shape)
-        # print('sd', sd.shape)
-        z = ((spec - mu) / sd).T
-        z_scored.append(z)
-    return(z_scored)
+    if adaptor_file:
+        adaptor = get_adaptor(adaptor_file)
+    else:
+        adaptor = None
 
-# def zero_pad(spec, max_seq_length):
-#     num_zeros = max_seq_length - spec.shape[1]
-#     zeros = np.zeros([spec.shape[0], num_zeros]) 
-#     zero_padded = np.hstack((spec, zeros))
-#     return(zero_padded)
+    test = load_specs(test_path, adaptor, alpha)
 
-def truncate(spec, min_seq_length):
-    return(spec[0:spec.shape[0], 0:min_seq_length]) # take all elements of first dimension and only 0:min_seq_length of second element. 
-
-def get_mu_sd(specs):
-    #print(type(specs))
-    spec_all = np.concatenate(specs,0)
-    # print(type(spec_all[0]))
-    # print(spec_all) 
-    # spec_all[spec_all == 0] = np.nan  #replace 0 with nan
-    # spec_all = np.ma.array(spec_all, mask=np.isnan(spec_all)) #mask nan --ignored when taking mean. 
-
-    mu = np.mean(spec_all,0)  
-   
-
-    sd = np.sqrt(np.var(spec_all, 0))
-    return(mu,sd)
-
+    return(train, val, test)
 
 
 def get_tensor(specs, labs, filenames = 0):
@@ -173,8 +195,6 @@ def get_tensor(specs, labs, filenames = 0):
         if filenames != 0:
             tensors_filenames.append(filenames[i])  #not a tensor
 
-
-
     if filenames == 0: 
         return(tensors_specs, tensors_labs)
     else:
@@ -182,38 +202,53 @@ def get_tensor(specs, labs, filenames = 0):
 
 
 class Melspectrogram(object):
-    def __init__(self, train_path, test_path, split_proportion, split_method):
+    def __init__(self, train_path, test_path, split_proportion, split_method, adaptor):
         
-        train_specs, train_labs, val_specs, val_labs, test_specs, test_labs, test_filenames = get_sets(train_path, test_path, split_method, split_proportion)
-        
-        # train_mu, train_sd = get_mu_sd(train_specs)
-        # train_z_scored = z_score(train_specs, train_mu, train_sd)
+        train,val,test = get_sets(train_path, test_path, split_method, split_proportion, adaptor)
+    
+        train.zscore(train.mu, train.sd)
+        self.train, self.train_labs = get_tensor(train.zscored, train.labs)
+        self.train_files = train.filenames
+        self.train_seq_lens = train.seq_lens
 
-        train_truncated = [truncate(spec, 10) for spec in train_specs]
-        train_mu, train_sd = get_mu_sd(train_truncated)
-        train_z_scored = z_score(train_truncated, train_mu, train_sd)
+        val.zscore(train.mu, train.sd)        
+        self.val, self.val_labs = get_tensor(val.zscored, val.labs)
+        self.val_files = val.filenames
+        self.val_seq_lens = val.seq_lens
 
-        self.train, self.train_labs = get_tensor(train_z_scored, train_labs)
+        test.zscore(train.mu, train.sd)        
+        self.test, self.test_labs = get_tensor(test.zscored, test.labs)
+        self.test_files = test.filenames
+        self.test_seq_lens = test.seq_lens
+
+        #train_truncated = [truncate(spec, 10) for spec in train_specs]
+        #train_mu, train_sd = get_mu_sd(train_truncated)
+        #train_z_scored = z_score(train_truncated, train_mu, train_sd)
+
+        #self.train, self.train_labs = get_tensor(train_z_scored, train_labs)
        
-
         # get val data 
-        # val_z_scored = z_score(val_specs, train_mu, train_sd)
-        val_truncated = [truncate(spec, 10) for spec in val_specs]
-        val_z_scored = z_score(val_truncated, train_mu, train_sd)         
-        self.val, self.val_labs = get_tensor(val_z_scored, val_labs)
+        #val_truncated = [truncate(spec, 10) for spec in val_specs]
+        #val_z_scored = z_score(val_truncated, train_mu, train_sd)
+        
+        
 
         # get test data
+        #test_truncated = [truncate(spec, 10) for spec in test_specs]
+        #test_z_scored = z_score(test_truncated, train_mu, train_sd)   
         # test_z_scored = z_score(test_specs, train_mu, train_sd)
-        test_truncated = [truncate(spec, 10) for spec in test_specs]
-        test_z_scored = z_score(test_truncated, train_mu, train_sd)       
-        self.test, self.test_labs, self.test_filenames = get_tensor(test_z_scored, test_labs, test_filenames)
+        # self.test, self.test_labs, self.test_files = get_tensor(test_z_scored, test_labs, test_files)
 
 
-
+#print(dir_list[0])
+#print(get_seqlength(dir_list))
 # all_train_dir = './ChodroffWilson2014/spectrograms/128/'
 # test_dir = './SyntheticDG/spectrograms/'
 
-# train_specs, train_labs, val_specs, val_labs, test_specs, test_labs, test_filenames = get_sets(all_train_dir, test_dir,  0, 0.8)
+# train = './data/train.txt'
+# test = './data/test.txt'
+
+# train_specs, train_labs, train_files, val_specs, val_labs, val_files, test_specs, test_labs, test_files = get_sets(train, test,  0, 0.8)
 # train_mu, train_sd = get_mu_sd(train_specs)
 
 #print(train_mu)
@@ -224,6 +259,15 @@ class Melspectrogram(object):
 # print(len(train_specs[1]))
 # print(len(val_specs[1]))
 
+x = load_specs('./data/train.txt')
+
+
+"""
+
+To do: 
+1. Make batches for test and validation 
+
+"""
 
 
 
