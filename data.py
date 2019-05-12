@@ -9,9 +9,32 @@ import random
 import torch.nn.utils.rnn as rnn_utils
 
 
-lab_to_int = {
+# lab_to_int = {
+#     'D': 0,
+#     'G': 1
+# }
+
+combined_to_int = {
+    'DAA': 0,
+    'DAE': 1,
+    'DIY': 2,
+    'DUW': 3,
+    'GAA': 4,
+    'GAE': 5,
+    'GIY': 6,
+    'GUW': 7
+}
+
+vowel_to_int = {
+    'AA': 0,
+    'AE': 1,
+    'IY': 2,
+    'UW': 3
+}
+
+cons_to_int = {
     'D': 0,
-    'G': 1
+    'G':1
 }
 
 eps = 1.0e-8
@@ -22,11 +45,13 @@ train = []
 
 
 class Spec:
-    def __init__(self,vals, seq_lens, labs, filenames):
+    def __init__(self,vals, seq_lens, cons_labs, vowel_labs, combined_labs, filenames):
         self.vals = vals
         self.seq_lens = seq_lens
-        self.labs = labs
         self.filenames = filenames
+        self.cons_labs = cons_labs
+        self.vowel_labs = vowel_labs
+        self.combined_labs = combined_labs
 
         a = np.concatenate(self.vals, 1)
         a[a==0] = np.nan
@@ -87,12 +112,22 @@ def zero_pad(spec, max_seq_length):
     return(zero_padded)
 
 
-
-
 def load_specs(names_file, adaptor = None, alpha = None):
     specs = []
-    labs = []
+    combined_labs = []
+    cons_labs = []
+    vowel_labs = []
     filenames = []
+    lab_counts = {
+        'DAA': 0,
+        'DAE': 0,
+        'DIY': 0,
+        'DUW': 0,
+        'GAA': 0,
+        'GAE': 0,
+        'GIY': 0,
+        'GUW': 0
+    }
     with open(names_file) as f:
         files = f.read().splitlines()
 
@@ -100,7 +135,13 @@ def load_specs(names_file, adaptor = None, alpha = None):
         with open(f, 'rb') as f:
             data = pickle.load(f)
             for item in data:  #len of item should be 6
-                labs.append(item[3])
+
+                # lab = item[3]+item[4]
+                # lab_counts[lab]+=1
+
+                cons_labs.append(item[3])
+                vowel_labs.append(item[4])
+                combined_labs.append(item[3]+item[4])
                 filenames.append(item[0])
                 
                 if adaptor != None:
@@ -113,16 +154,18 @@ def load_specs(names_file, adaptor = None, alpha = None):
 
     seq_length = [len(spec[0]) for spec in specs] #the length of spec will be same for every filter
     max_len = max(seq_length)
+    #print(max_len)
+    max_len = 107
 
     specs = [zero_pad(spec, max_len) for spec in specs]
 
     # Shuffle training
-    everything = list(zip(specs, seq_length, labs, filenames))
+    everything = list(zip(specs, seq_length, cons_labs, vowel_labs, combined_labs, filenames))
     random.shuffle(everything)
-    specs, seq_length, labs, filenames = zip(*everything)
+    specs, seq_length, cons_labs, vowel_labs, combined_labs, filenames = zip(*everything)
 
-    spec = Spec(specs,seq_length, labs, filenames)
-
+    spec = Spec(specs,seq_length, cons_labs, vowel_labs, combined_labs, filenames)
+    #print(names_file,lab_counts)
     return(spec)
 
 
@@ -139,7 +182,7 @@ def get_adaptor(adaptor_file):
 
 
 def get_sets(train_path, test_path, split_method, split_proportion, adaptor_file = None, alpha = 0.01):
-
+    #print('split prop', split_proportion)
     all_train = load_specs(train_path)
 
     if split_method == 1:  #i.e by person
@@ -147,12 +190,16 @@ def get_sets(train_path, test_path, split_method, split_proportion, adaptor_file
 
         train_specs = all_train.vals[0:split_ind]
         train_seq_lens = all_train.seq_lens[0:split_ind]
-        train_labs = all_train.labs[0:split_ind]
+        train_cons_labs = all_train.cons_labs[0:split_ind]
+        train_vowel_labs = all_train.vowel_labs[0:split_ind]
+        train_combined_labs = all_train.combined_labs[0:split_ind]
         train_files = all_train.filenames[0:split_ind]
 
         val_specs = all_train.vals[split_ind:]
         val_seq_lens = all_train.seq_lens[split_ind:]
-        val_labs = all_train.labs[split_ind:]
+        val_cons_labs = all_train.cons_labs[split_ind:]
+        val_vowel_labs = all_train.vowel_labs[split_ind:]
+        val_combined_labs = all_train.combined_labs[split_ind:]
         val_files = all_train.filenames[split_ind:]
 
     else: # each person has approx 100 words. So take words 1:80, 100:180 etc
@@ -162,16 +209,20 @@ def get_sets(train_path, test_path, split_method, split_proportion, adaptor_file
 
         train_specs = [all_train.vals[i] for i in train_inds]
         train_seq_lens = [all_train.seq_lens[i] for i in train_inds]
-        train_labs = [all_train.labs[i] for i in train_inds]
+        train_cons_labs = [all_train.cons_labs[i] for i in train_inds]
+        train_vowel_labs = [all_train.vowel_labs[i] for i in train_inds]
+        train_combined_labs = [all_train.combined_labs[i] for i in train_inds]
         train_files = [all_train.filenames[i] for i in train_inds]
 
         val_specs = [all_train.vals[i] for i in val_inds]
         val_seq_lens = [all_train.seq_lens[i] for i in val_inds]
-        val_labs = [all_train.labs[i] for i in val_inds]
+        val_cons_labs = [all_train.cons_labs[i] for i in val_inds]
+        val_vowel_labs = [all_train.vowel_labs[i] for i in val_inds]
+        val_combined_labs = [all_train.combined_labs[i] for i in val_inds]
         val_files = [all_train.filenames[i] for i in val_inds]
 
-    train = Spec(train_specs, train_seq_lens, train_labs, train_files)
-    val = Spec(val_specs, val_seq_lens, val_labs, val_files)
+    train = Spec(train_specs, train_seq_lens, train_cons_labs, train_vowel_labs, train_combined_labs, train_files)
+    val = Spec(val_specs, val_seq_lens, val_cons_labs, val_vowel_labs, val_combined_labs,val_files)
 
 
     if adaptor_file:
@@ -184,21 +235,30 @@ def get_sets(train_path, test_path, split_method, split_proportion, adaptor_file
     return(train, val, test)
 
 
-def get_tensor(specs, labs, filenames = 0):
+def get_tensor(specs, cons_labs, vowel_labs, combined_labs, filenames = 0):
     tensors_specs = []
-    tensors_labs = []
+    tensors_cons_labs = []
+    tensors_vowel_labs = []
+    tensors_combined_labs = []
     tensors_filenames = []
     for i,spec in enumerate(specs):
-        curr_lab = labs[i]
+        curr_cons_lab = cons_labs[i]
+        tensors_cons_labs.append(torch.LongTensor([cons_to_int[curr_cons_lab]]))
+
+        curr_vowel_lab = vowel_labs[i]
+        tensors_vowel_labs.append(torch.LongTensor([vowel_to_int[curr_vowel_lab]]))
+
+        curr_combined_lab = combined_labs[i]
+        tensors_combined_labs.append(torch.LongTensor([combined_to_int[curr_combined_lab]]))
+
         tensors_specs.append(torch.Tensor(spec))
-        tensors_labs.append(torch.LongTensor([lab_to_int[curr_lab]]))
         if filenames != 0:
             tensors_filenames.append(filenames[i])  #not a tensor
 
     if filenames == 0: 
-        return(tensors_specs, tensors_labs)
+        return(tensors_specs, tensors_cons_labs, tensors_vowel_labs, tensors_combined_labs)
     else:
-        return(tensors_specs, tensors_labs, tensors_filenames)
+        return(tensors_specs, tensors_cons_labs, tensors_vowel_labs, tensors_combined_labs, tensors_filenames)
 
 
 class Melspectrogram(object):
@@ -207,17 +267,17 @@ class Melspectrogram(object):
         train,val,test = get_sets(train_path, test_path, split_method, split_proportion, adaptor)
     
         train.zscore(train.mu, train.sd)
-        self.train, self.train_labs = get_tensor(train.zscored, train.labs)
+        self.train, self.train_cons_labs, self.train_vowel_labs, self.train_combined_labs = get_tensor(train.zscored, train.cons_labs, train.vowel_labs, train.combined_labs)
         self.train_files = train.filenames
         self.train_seq_lens = train.seq_lens
 
         val.zscore(train.mu, train.sd)        
-        self.val, self.val_labs = get_tensor(val.zscored, val.labs)
+        self.val, self.val_cons_labs, self.val_vowel_labs, self.val_combined_labs = get_tensor(val.zscored, val.cons_labs, val.vowel_labs, val.combined_labs)
         self.val_files = val.filenames
         self.val_seq_lens = val.seq_lens
 
         test.zscore(train.mu, train.sd)        
-        self.test, self.test_labs = get_tensor(test.zscored, test.labs)
+        self.test, self.test_cons_labs, self.test_vowel_labs, self.test_combined_labs = get_tensor(test.zscored, test.cons_labs, test.vowel_labs, test.combined_labs)
         self.test_files = test.filenames
         self.test_seq_lens = test.seq_lens
 
