@@ -154,9 +154,7 @@ if args.testmodel != 'NA':  #i.e. there is an existing test model
         model = torch.load(f)
 
 else:
-    print('hello')
-
-
+    # print('hello')
 
     dat = data.Melspectrogram(args.traindir, args.testdir, args.split_prop, args.split_method, args.adaptor)
 
@@ -244,8 +242,8 @@ if args.testmodel == 'NA': #i.e. there isn't a pre-trained model
             else:
                 cons_loss = criterion(output[0], cons_label)
                 vowel_loss = criterion(output[1], vowel_label)
-                #loss = 2*cons_loss + vowel_loss
-                loss = cons_loss
+                loss = cons_loss + 0.2*vowel_loss
+                #loss = cons_loss
 
             # Backward and optimize
             optimizer.zero_grad()
@@ -260,7 +258,46 @@ if args.testmodel == 'NA': #i.e. there isn't a pre-trained model
     
 # ## TEST
 
-##  Validate (i.e. test on held out natural speech)
+## Test on training data
+with torch.no_grad():
+    correct = 0
+    correct_cons = 0
+    correct_vowel = 0
+    total = 0
+    total_cons = 0
+    total_vowel = 0
+
+    for i, batch in enumerate(train_data):
+        grouped = torch.stack(batch)
+        sound = grouped.reshape(batch_size, sequence_length, input_size).to(device) #change this 1 to batch size if I want to implement batches in the future
+        cons_label = torch.LongTensor(train_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+        vowel_label = torch.LongTensor(train_vowel_labs[i]).to(device)
+        combined_label = torch.LongTensor(train_combined_labs[i]).to(device)
+        seq_len = torch.LongTensor(train_seq_lens[i]).to(device)
+        
+        output = model(sound, seq_len)
+
+        if args.classification == 1:
+            _, predicted = torch.max(output.data, 1)
+            total += combined_label.size(0)
+            correct += (predicted == combined_label).sum().item()
+        
+        else:
+            _, predicted_cons = torch.max(output[0].data, 1)
+            _, predicted_vowel = torch.max(output[1].data, 1)
+            total_cons += cons_label.size(0)
+            total_vowel += vowel_label.size(0)
+            correct_cons += (predicted_cons == cons_label).sum().item()
+            correct_vowel += (predicted_vowel == vowel_label).sum().item()
+
+
+    if total != 0 and args.classification==1:
+        print('Test Accuracy on training data (vowels, cons combined) {} %'.format(100 * correct / total)) 
+    else:
+        print('Test Accuracy on training data: cons {} %'.format(100 * correct_cons / total_cons))
+        print('Test Accuracy on training data: vowels {} %'.format(100 * correct_vowel / total_vowel))
+
+##  Test on held out natural speech
 with torch.no_grad():
     correct = 0
     correct_cons = 0
@@ -294,10 +331,10 @@ with torch.no_grad():
 
 
     if total != 0 and args.classification==1:
-        print('Test Accuracy on natural speech (vowels, cons combined) {} %'.format(100 * correct / total)) 
+        print('Test Accuracy on held out data (vowels, cons combined) {} %'.format(100 * correct / total)) 
     else:
-        print('Test Accuracy on natural speech: cons {} %'.format(100 * correct_cons / total_cons))
-        print('Test Accuracy on natural speech: vowels {} %'.format(100 * correct_vowel / total_vowel))
+        print('Test Accuracy on held out data: cons {} %'.format(100 * correct_cons / total_cons))
+        print('Test Accuracy on held out data: vowels {} %'.format(100 * correct_vowel / total_vowel))
 
 
 # Test on continuum
@@ -320,7 +357,6 @@ with torch.no_grad():
         output = model(sound, seq_len)
         filenum = [int(re.findall('\d+', x)[0]) for x in test_filenames[i]]
         filename = [x for x in test_filenames[i]]
-        print(len(filename))
         
         sm = torch.nn.Softmax(dim=1)
         if args.classification==1:
