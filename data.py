@@ -14,6 +14,8 @@ import torch.nn.utils.rnn as rnn_utils
 #     'G': 1
 # }
 
+eps = 1.0e-8
+
 combined_to_int = {
     'DAA': 0,
     'DAE': 1,
@@ -89,18 +91,32 @@ def get_seqlength(dir_list):
     return(max(seq_lens), min(seq_lens))
 
 
-def spectral_subtraction(spec, adaptor, alpha):  #function taken from Colin (sigproc.py)
+def get_adaptor(adaptor_file):
+    with open(adaptor_file, 'rb') as f:
+        data = pickle.load(f)
+    # print(type(data))
+    # print(data.shape)
+    
+    adaptor = np.mean(data, 1)   # this will change depending on the kind of averaging
+    adaptor = adaptor[:,None]
+    return(adaptor)
+
+
+def subtract_precursor(spec, adaptor_file, alpha):  #function taken from Colin (sigproc.py)
     # print(type(spec))
     # print(type(adaptor))
     # print(type(alpha))
+    adaptor = get_adaptor(adaptor_file)
     spec, adaptor = np.exp(spec), np.exp(adaptor)
-    spec_out = spec - alpha * adaptor
+    spec_out = spec - (alpha * adaptor)
+    spec_out = np.maximum(spec_out, 0)  #gets rid of negative numbers
+    spec_out = np.log(spec_out + eps)
 
-    #print(type(spec_out))
+    # This is stuff that Colin had
+    # spec_out = np.maximum(spec_out, 0.01*spec)
+    # spec_out = np.maximum(spec_out, 1.0e-8)
 
-    spec_out = np.maximum(spec_out, 0.01*spec)
-    spec_out = np.maximum(spec_out, 1.0e-8)
-    spec_out = np.log(spec_out) 
+    
     #print('adaptor', type(spec_out))
 
     return(spec_out)
@@ -112,7 +128,7 @@ def zero_pad(spec, max_seq_length):
     return(zero_padded)
 
 
-def load_specs(names_file, adaptor = None, alpha = None):
+def load_specs(names_file, adaptor_file = None, alpha = None):
     specs = []
     combined_labs = []
     cons_labs = []
@@ -144,8 +160,8 @@ def load_specs(names_file, adaptor = None, alpha = None):
                 combined_labs.append(item[3]+item[4])
                 filenames.append(item[0])
                 
-                if adaptor != None:
-                    curr_spec = spectral_subtraction(item[1], adaptor, alpha)
+                if adaptor_file != None:
+                    curr_spec = subtract_precursor(item[1], adaptor_file, alpha)
                     #print('adaptor',type(adaptor))
                     #print('curr_spec', type(curr_spec))
                 else:
@@ -170,18 +186,8 @@ def load_specs(names_file, adaptor = None, alpha = None):
 
 
 
-def get_adaptor(adaptor_file):
-    with open(adaptor_file, 'rb') as f:
-        data = pickle.load(f)
-    #print(data.shape)
-    
-    adaptor = np.mean(data, 1)   # this will change depending on the kind of averaging
-    adaptor = adaptor[:,None]
-    return(adaptor)
 
-
-
-def get_sets(train_path, test_path, split_method, split_proportion, adaptor_file = None, alpha = 0.01):
+def get_sets(train_path, test_path, split_method, split_proportion, adaptor_file, alpha = 0.1):
     #print('split prop', split_proportion)
     all_train = load_specs(train_path)
 
@@ -230,9 +236,10 @@ def get_sets(train_path, test_path, split_method, split_proportion, adaptor_file
     else:
         adaptor = None
 
-    test = load_specs(test_path, adaptor, alpha)
+    test = load_specs(test_path)
+    test_subtracted = load_specs(test_path, adaptor_file, alpha)
 
-    return(train, val, test)
+    return(train, val, test, test_subtracted)
 
 
 def get_tensor(specs, cons_labs, vowel_labs, combined_labs, filenames = 0):
@@ -262,9 +269,9 @@ def get_tensor(specs, cons_labs, vowel_labs, combined_labs, filenames = 0):
 
 
 class Melspectrogram(object):
-    def __init__(self, train_path, test_path, split_proportion, split_method, adaptor):
+    def __init__(self, train_path, test_path, split_proportion, split_method, adaptor_file):
         
-        train,val,test = get_sets(train_path, test_path, split_method, split_proportion, adaptor)
+        train,val,test,test_subtracted = get_sets(train_path, test_path, split_method, split_proportion, adaptor_file)
     
         train.zscore(train.mu, train.sd)
         self.train, self.train_cons_labs, self.train_vowel_labs, self.train_combined_labs = get_tensor(train.zscored, train.cons_labs, train.vowel_labs, train.combined_labs)
@@ -280,6 +287,11 @@ class Melspectrogram(object):
         self.test, self.test_cons_labs, self.test_vowel_labs, self.test_combined_labs = get_tensor(test.zscored, test.cons_labs, test.vowel_labs, test.combined_labs)
         self.test_files = test.filenames
         self.test_seq_lens = test.seq_lens
+
+        test_subtracted.zscore(train.mu, train.sd)        
+        self.test_subtracted, self.test_subtracted_cons_labs, self.test_subtracted_vowel_labs, self.test_subtracted_combined_labs = get_tensor(test_subtracted.zscored, test_subtracted.cons_labs, test_subtracted.vowel_labs, test_subtracted.combined_labs)
+        self.test_subtracted_files = test_subtracted.filenames
+        self.test_subtracted_seq_lens = test_subtracted.seq_lens
 
         #train_truncated = [truncate(spec, 10) for spec in train_specs]
         #train_mu, train_sd = get_mu_sd(train_truncated)

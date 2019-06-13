@@ -9,6 +9,8 @@ import model
 import random
 import re
 
+import os
+
 # PARSE ARGUMENTS
 
 parser = argparse.ArgumentParser(description='PyTorch consonant classifier')
@@ -31,7 +33,7 @@ parser.add_argument('--testdir', type=str, default='./data/test.txt',
 parser.add_argument('--testmodel', type=str, default='NA',
                     help='name of pre-trained model you want to test')
 
-parser.add_argument('--adaptor', type=str, default=None,
+parser.add_argument('--adaptor', type=str, default='./precursors/unpadded/20mels/midhigh.pkl',
                     help='file path of adaptor that will get subtracted from test')
 
 parser.add_argument('--nmels', type=int, default=20,
@@ -49,7 +51,7 @@ parser.add_argument('--split_method', type=int, default=1,
 parser.add_argument('--epoch_prop', type=float, default=0.8,
                     help='Value between 0 and 1. Determines what percent of training data network sees per epoch')
 
-parser.add_argument('--lr', type=float, default=0.01,
+parser.add_argument('--lr', type=float, default=0.005,
                     help='learning rate')
 
 parser.add_argument('--hidden_size', type=int, default=20,
@@ -196,6 +198,7 @@ else:
 
 
 
+
     #print(train_data)
     #print(type(dat.train))
     # Initialize model
@@ -339,6 +342,7 @@ with torch.no_grad():
 
 # Test on continuum
 with torch.no_grad():
+
     correct = 0
     total = 0
     filenum_dict = dict((el, []) for el in range(1,21))
@@ -371,23 +375,101 @@ with torch.no_grad():
 
         curr = []
         for i,p in enumerate(probs):
-            filename_dict[filename[i]] = round(float(p[0].item()), 3)
+            filename_dict[filename[i]] = round(float(p[1].item()), 3) #change to p[0] for % D
 
 
-    for i,key in enumerate(sorted(filename_dict)):  # Print by filenum
-        if i%20==0:
-            print('-----------------------')
-        print('%s: %s'%(key,filename_dict[key]))
+    dat_path = './csv/%s/'%os.path.basename(modelname)
+
+    if not os.path.exists(dat_path):
+        os.mkdir(dat_path)
+
+    with open('%spre_subtraction.csv'%dat_path, 'w') as f:
+        f.write('fname, filenum, vowel, adaptor, prob_G \n')
+        for key in filename_dict:
+            filenum = int(re.findall('\d+', key)[0])
+            f_name = os.path.basename(key)
+            if f_name[1] == '_':
+                vowel = f_name[0:1]
+            else:
+                vowel = f_name[0:2]
+
+            f.write('%s,%s,%s,%s,%s \n'%(f_name, filenum, vowel, 'no-adapt' , filename_dict[key]))
+
+    # for i,key in enumerate(sorted(filename_dict)):  # Print by filenum
+    #     if i%20==0:
+    #         print('-----------------------')
+    #     print('%s: %s'%(key,filename_dict[key]))
 
 
-        # for item in filename_dict[key]:
-        #     print(item)
-        # print('----------')
 
 
-        #Uncomment in order to get a prediction and accuracy. 
-    #     _, predicted = torch.max(output.data, 1)
-    #     total += label.size(0)
-    #     correct += (predicted == label).sum().item()
+# Test on continuum after subtraction
+print('TESTING AFTER SUBTRACTION')
+adaptor_list = ['./precursors/unpadded/20mels/midhigh.pkl', './precursors/unpadded/20mels/highmid.pkl', './precursors/unpadded/20mels/midlow.pkl', './precursors/unpadded/20mels/lowmid.pkl']
 
-    # print('Test Accuracy of the model on synthetic speech {} %'.format(100 * correct / total))
+with open('%spost_subtraction.csv'%dat_path, 'w') as f:
+    f.write('fname, filenum, vowel, adaptor, prob_G \n')
+
+    for adaptor in adaptor_list:
+        with torch.no_grad():
+            dat = data.Melspectrogram(args.traindir, args.testdir, args.split_prop, args.split_method, adaptor)
+
+            subtracted_test_data = get_batch(dat.test_subtracted, batch_size)
+            subtracted_test_cons_labs = get_batch(dat.test_subtracted_cons_labs, batch_size)
+            subtracted_test_vowel_labs = get_batch(dat.test_subtracted_vowel_labs, batch_size)
+            subtracted_test_combined_labs = get_batch(dat.test_subtracted_combined_labs, batch_size)
+            subtracted_test_seq_lens = get_batch(dat.test_subtracted_seq_lens, batch_size)
+            subtracted_test_filenames = get_batch(dat.test_subtracted_files, batch_size)
+
+            order_set(subtracted_test_seq_lens, subtracted_test_data, subtracted_test_cons_labs, subtracted_test_vowel_labs, subtracted_test_combined_labs, subtracted_test_filenames)
+
+            correct = 0
+            total = 0
+            filenum_dict = dict((el, []) for el in range(1,21))
+            filename_dict = dict((el, 0) for el in flatten(subtracted_test_filenames))
+            probs_dict = {0: [], 1: []}
+
+            for i, batch in enumerate(subtracted_test_data):
+                grouped = torch.stack(batch)
+                sound = grouped.reshape(batch_size, sequence_length, input_size).to(device) #change this 1 to batch size if I want to implement batches in the future
+                cons_label = torch.LongTensor(subtracted_test_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+                vowel_label = torch.LongTensor(subtracted_test_vowel_labs[i]).to(device)
+                combined_label = torch.LongTensor(subtracted_test_combined_labs[i]).to(device)
+                seq_len = torch.LongTensor(subtracted_test_seq_lens[i]).to(device)
+                
+                output = model(sound, seq_len)
+                filenum = [int(re.findall('\d+', x)[0]) for x in subtracted_test_filenames[i]]
+                filename = [x for x in subtracted_test_filenames[i]]
+                
+                sm = torch.nn.Softmax(dim=1)
+                if args.classification==1:
+                    all_probs = sm(output)
+                    probs = [[sum(x[0:4]), sum(x[4:8])] for x in all_probs]
+                    # print(all_probs)
+                    # print(len(probs))
+
+                else:
+                    probs = sm(output[0])
+                    # print(probs)
+
+                curr = []
+                for i,p in enumerate(probs):
+                    filename_dict[filename[i]] = round(float(p[1].item()), 3)  #change to p[0] for % D
+
+
+            for key in filename_dict:
+                filenum = int(re.findall('\d+', key)[0])
+                f_name = os.path.basename(key)
+                if f_name[1] == '_':
+                    vowel = f_name[0:1]
+                else:
+                    vowel = f_name[0:2]
+
+                f.write('%s,%s,%s,%s,%s \n'%(f_name, filenum, vowel, os.path.basename(adaptor), filename_dict[key]))
+
+
+            # for i,key in enumerate(sorted(filename_dict)):  # Print by filenum
+            #     if i%20==0:
+            #         print('-----------------------')
+            #     print('%s: %s'%(key,filename_dict[key]))
+

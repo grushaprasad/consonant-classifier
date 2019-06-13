@@ -54,12 +54,3 @@ class BiRNN(nn.Module):
             return (out_c, out_v)
 
 
-"""
-To do:
-
-Have two linear layers: One for vowel and one for consonant. Return two outputs (out_cons, out_vowel)
-Separately compute the loss for both these outputs in main.py
-
-loss = sum of both these losses. Then backprop on this loss. 
-
-"""
