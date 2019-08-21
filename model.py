@@ -34,8 +34,14 @@ class BiRNN(nn.Module):
         out, _ = torch.nn.utils.rnn.pad_packed_sequence(packed_out, batch_first = True)
 
         # Extract the outputs for the last timestep of each example
-        idx = (torch.LongTensor(seq_length) - 1).view(-1, 1).expand(
-            len(seq_length), out.size(2))
+        
+        if torch.cuda.is_available(): 
+            idx = (torch.cuda.LongTensor(seq_length) - 1).view(-1, 1).expand(
+                len(seq_length), out.size(2))
+        else:
+            idx = (torch.LongTensor(seq_length) - 1).view(-1, 1).expand(
+                len(seq_length), out.size(2))
+
         time_dimension = 1  #should be 0 if not batch_first
         idx = idx.unsqueeze(time_dimension)
         if out.is_cuda:

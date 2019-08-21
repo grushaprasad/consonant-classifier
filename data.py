@@ -106,20 +106,23 @@ def subtract_precursor(spec, adaptor_file, alpha):  #function taken from Colin (
     # print(type(spec))
     # print(type(adaptor))
     # print(type(alpha))
-    adaptor = get_adaptor(adaptor_file)
-    spec, adaptor = np.exp(spec), np.exp(adaptor)
-    spec_out = spec - (alpha * adaptor)
-    spec_out = np.maximum(spec_out, 0)  #gets rid of negative numbers
-    spec_out = np.log(spec_out + eps)
+    if adaptor_file != 'NA':
+        adaptor = get_adaptor(adaptor_file)
+        #print(adaptor, adaptor_file)
+        spec, adaptor = np.exp(spec), np.exp(adaptor)
+        spec_out = spec - (alpha * adaptor)
+        spec_out = np.maximum(spec_out, 0)  #gets rid of negative numbers
+        spec_out = np.log(spec_out + eps)
 
-    # This is stuff that Colin had
-    # spec_out = np.maximum(spec_out, 0.01*spec)
-    # spec_out = np.maximum(spec_out, 1.0e-8)
+        # This is stuff that Colin had
+        # spec_out = np.maximum(spec_out, 0.01*spec)
+        # spec_out = np.maximum(spec_out, 1.0e-8)
+        #print('adaptor', type(spec_out))
 
-    
-    #print('adaptor', type(spec_out))
+        return(spec_out)
 
-    return(spec_out)
+    else:
+        return(spec)
 
 def zero_pad(spec, max_seq_length):
     num_zeros = max_seq_length - spec.shape[1]
@@ -160,7 +163,7 @@ def load_specs(names_file, adaptor_file = None, alpha = None):
                 combined_labs.append(item[3]+item[4])
                 filenames.append(item[0])
                 
-                if adaptor_file != None:
+                if adaptor_file:
                     curr_spec = subtract_precursor(item[1], adaptor_file, alpha)
                     #print('adaptor',type(adaptor))
                     #print('curr_spec', type(curr_spec))
@@ -231,10 +234,10 @@ def get_sets(train_path, test_path, split_method, split_proportion, adaptor_file
     val = Spec(val_specs, val_seq_lens, val_cons_labs, val_vowel_labs, val_combined_labs,val_files)
 
 
-    if adaptor_file:
-        adaptor = get_adaptor(adaptor_file)
-    else:
-        adaptor = None
+    # if adaptor_file != 'NA':
+    #     adaptor = get_adaptor(adaptor_file)
+    # else:
+    #     adaptor = None
 
     test = load_specs(test_path)
     test_subtracted = load_specs(test_path, adaptor_file, alpha)
@@ -250,15 +253,22 @@ def get_tensor(specs, cons_labs, vowel_labs, combined_labs, filenames = 0):
     tensors_filenames = []
     for i,spec in enumerate(specs):
         curr_cons_lab = cons_labs[i]
-        tensors_cons_labs.append(torch.LongTensor([cons_to_int[curr_cons_lab]]))
-
         curr_vowel_lab = vowel_labs[i]
-        tensors_vowel_labs.append(torch.LongTensor([vowel_to_int[curr_vowel_lab]]))
-
         curr_combined_lab = combined_labs[i]
-        tensors_combined_labs.append(torch.LongTensor([combined_to_int[curr_combined_lab]]))
 
-        tensors_specs.append(torch.Tensor(spec))
+        if torch.cuda.is_available():
+            tensors_cons_labs.append(torch.cuda.LongTensor([cons_to_int[curr_cons_lab]]))
+            tensors_vowel_labs.append(torch.cuda.LongTensor([vowel_to_int[curr_vowel_lab]]))
+            tensors_combined_labs.append(torch.cuda.LongTensor([combined_to_int[curr_combined_lab]]))
+            tensors_specs.append(torch.cuda.FloatTensor(spec))
+
+        else:
+            tensors_cons_labs.append(torch.LongTensor([cons_to_int[curr_cons_lab]]))
+            tensors_vowel_labs.append(torch.LongTensor([vowel_to_int[curr_vowel_lab]]))
+            tensors_combined_labs.append(torch.LongTensor([combined_to_int[curr_combined_lab]]))
+            tensors_specs.append(torch.Tensor(spec))
+        
+        
         if filenames != 0:
             tensors_filenames.append(filenames[i])  #not a tensor
 
@@ -331,15 +341,8 @@ class Melspectrogram(object):
 # print(len(train_specs[1]))
 # print(len(val_specs[1]))
 
-x = load_specs('./data/train.txt')
+#x = load_specs('./data/train.txt')
 
-
-"""
-
-To do: 
-1. Make batches for test and validation 
-
-"""
 
 
 

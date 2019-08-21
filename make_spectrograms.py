@@ -2,6 +2,7 @@ import librosa, tgt
 import numpy as np, math
 import glob, pickle, re, sys
 import os
+import itertools
 
 vowels = {
     'a': 'AA',
@@ -27,7 +28,7 @@ lab_to_int = {
 sr_target   = 11025 # 11.025 kHz of Stephens & Holt (2011)
 n_fft = int((sr_target*20)/1000)  # makes the window size roughly 25 ms. 
 hop_length = int((sr_target*10)/1000) # shifts the window by roughly 10 ms
-n_mels      = 64    # librosa default is 128
+n_mels      = 20    # librosa default is 128
 eps         = 1.0e-8
 max_dur = 1.16 #seconds as computed by get_max_dur
 
@@ -198,12 +199,12 @@ if 1:
         y = s*x
         return y
 
-    def create_precursor_freqs(l1,l2):
+    def create_precursor_freqs(l1,l2=[]):
         np.random.shuffle(l1)
         np.random.shuffle(l2)
         return(np.concatenate((l1, l2),0))
 
-    def create_precursors(l, tone_sr, tone_dur):   
+    def create_precursors(l, tone_sr, tone_dur, num_standard=1, num_silence=1, num_standard_isi=0):   
         linear_ramp = np.linspace(0.0, 1.0, int(ramp_dur*tone_sr))
         mask = np.ones(int((tone_dur - 2.0*ramp_dur)*tone_sr))
         mask = np.concatenate((linear_ramp, mask, linear_ramp[::-1]))
@@ -213,13 +214,28 @@ if 1:
         sil = np.zeros(int(sil_dur * tone_sr))
         isi = np.zeros(int(isi_dur * tone_sr))
 
+        #print(([standard_tone] + [isi])*num_standard)
+
         precursor_list = [0]*len(l)
         for i, item in enumerate(l):
 
             curr_tones = [mask*librosa.core.tone(freq, tone_sr, duration=tone_dur)[0:771] for freq in item]
-            curr_precursor = np.concatenate([np.concatenate((tone, isi)) for tone in curr_tones] + [standard_tone, sil])
+
+
+            #curr_precursor = np.concatenate([np.concatenate((tone, isi)) for tone in curr_tones] + [standard_tone]*num_standard + [isi]*num_standard_isi + [sil]*num_silence)
+
+            curr_precursor = np.concatenate([np.concatenate((tone, isi)) for tone in curr_tones] + ([standard_tone] + [isi])*num_standard + [sil]*num_silence)
+
+            x = np.concatenate([np.concatenate((tone, isi)) for tone in curr_tones] + [standard_tone]*num_standard + [isi]*num_standard + [sil]*num_silence)
+
+            #print(list(itertools.chain(*zip(standard_tone, isi))))
+
+            #curr_precursor = np.concatenate([np.concatenate((tone, isi)) for tone in curr_tones] + list(itertools.chain(*zip(standard_tone, isi)))*num_standard + [sil]*num_silence)
+
             precursor_list[i] = scale_rms(curr_precursor, rms_target)
         return(precursor_list)
+
+
 
     low = np.arange(800.0, 1800.0+100.0, 100.0) # mean 1300
     mid = np.arange(1800.0, 2800.0+100.0, 100.0) # mean 2300
@@ -230,42 +246,283 @@ if 1:
     highmid = [create_precursor_freqs(high, mid) for i in range(num_trials_per_cond*len(stim_files))]
     midhigh = [create_precursor_freqs(mid, high) for i in range(num_trials_per_cond*len(stim_files))]
 
+    holt_low_mean = np.arange(1300.0, 2300.0+50.0, 50.0) # mean 1800
+    holt_high_mean = np.arange(2300.0, 3300.0+50.0, 50.0) # mean 2800
+    holt_low_variance = np.arange(1800.0, 2800.0+50.0, 50.0) # mean 2300
+    holt_high_variance = np.arange(1300.0, 3300.0+50.0, 50.0) # mean 2300 
+
+    lowmean = [create_precursor_freqs(holt_low_mean) for i in range(num_trials_per_cond*len(stim_files))]
+    highmean = [create_precursor_freqs(holt_high_mean) for i in range(num_trials_per_cond*len(stim_files))]
+    lowvariance = [create_precursor_freqs(holt_low_variance) for i in range(num_trials_per_cond*len(stim_files))]
+    highvariance = [create_precursor_freqs(holt_high_variance) for i in range(num_trials_per_cond*len(stim_files))]
+
     #lowmid = [create_precursor_freqs(low, mid)]
 
+
+    #num_precursors = 5
+    num_precursors = 20
     # This is taking just just the first precursor. In the future maybe save the log melspec for a bunch of precursors?
-    lowmid_precursors = create_precursors(lowmid, sr, tone_dur)
-    lowmid_melspec = librosa.feature.melspectrogram(y=lowmid_precursors[0], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
-    lowmid_logmelspec = np.log(lowmid_melspec + eps)
-
-    midlow_precursors = create_precursors(midlow, sr, tone_dur)
-    midlow_melspec = librosa.feature.melspectrogram(y=midlow_precursors[0], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
-    midlow_logmelspec = np.log(midlow_melspec + eps)
-
-    highmid_precursors = create_precursors(highmid, sr, tone_dur)
-    highmid_melspec = librosa.feature.melspectrogram(y=highmid_precursors[0], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
-    highmid_logmelspec = np.log(highmid_melspec + eps)
-
-    midhigh_precursors = create_precursors(midhigh, sr, tone_dur)
-    midhigh_melspec = librosa.feature.melspectrogram(y=midhigh_precursors[0], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
-    midhigh_logmelspec = np.log(midhigh_melspec + eps)
 
 
-    pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'lowmid.pkl'
-    with open(pklfile, 'wb') as f:
-        pickle.dump(lowmid_logmelspec, f)
+    ### HOLT EXPERIMENTS ###
 
-    pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'midlow.pkl'
-    with open(pklfile, 'wb') as f:
-        pickle.dump(midlow_logmelspec, f)
+    ## Experiment 1
+    low_mean_precursors = create_precursors(lowmean, sr, tone_dur)
+    high_mean_precursors = create_precursors(highmean, sr, tone_dur)
+    low_variance_precursors = create_precursors(lowvariance, sr, tone_dur)
+    high_variance_precursors = create_precursors(highvariance, sr, tone_dur)
 
-    pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'highmid.pkl'
-    with open(pklfile, 'wb') as f:
-        pickle.dump(highmid_logmelspec, f)
+    for i in range(num_precursors):
+        low_mean_melspec = librosa.feature.melspectrogram(y=low_mean_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        low_mean_logmelspec = np.log(low_mean_melspec + eps)
 
-    pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'midhigh.pkl'
-    with open(pklfile, 'wb') as f:
-        pickle.dump(midhigh_logmelspec, f)
+        high_mean_melspec = librosa.feature.melspectrogram(y=high_mean_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        high_mean_logmelspec = np.log(high_mean_melspec + eps)
+
+        low_variance_melspec = librosa.feature.melspectrogram(y=low_variance_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        low_variance_logmelspec = np.log(low_variance_melspec + eps)
+
+        high_variance_melspec = librosa.feature.melspectrogram(y=high_variance_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        high_variance_logmelspec = np.log(high_variance_melspec + eps)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_low_mean%s.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(low_mean_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_high_mean%s.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(high_mean_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_low_variance%s.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(low_variance_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_high_variance%s.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(high_variance_logmelspec, f)
 
 
+    # Experiment 2 (Long silence: 1300 ms)
 
-   
+    low_mean_precursors = create_precursors(lowmean, sr, tone_dur, num_silence = 26)
+    high_mean_precursors = create_precursors(highmean, sr, tone_dur, num_silence = 26)
+    low_variance_precursors = create_precursors(lowvariance, sr, tone_dur, num_silence = 26)
+    high_variance_precursors = create_precursors(highvariance, sr, tone_dur, num_silence = 26)
+
+    for i in range(num_precursors):
+        low_mean_melspec = librosa.feature.melspectrogram(y=low_mean_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        low_mean_logmelspec = np.log(low_mean_melspec + eps)
+
+        high_mean_melspec = librosa.feature.melspectrogram(y=high_mean_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        high_mean_logmelspec = np.log(high_mean_melspec + eps)
+
+        low_variance_melspec = librosa.feature.melspectrogram(y=low_variance_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        low_variance_logmelspec = np.log(low_variance_melspec + eps)
+
+        high_variance_melspec = librosa.feature.melspectrogram(y=high_variance_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        high_variance_logmelspec = np.log(high_variance_melspec + eps)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_low_mean%s_rep_silence26.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(low_mean_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_high_mean%s_rep_silence26.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(high_mean_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_low_variance%s_rep_silence26.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(low_variance_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_high_variance%s_rep_silence26.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(high_variance_logmelspec, f)
+
+
+    # Experiment 2 (Short silence: 500 ms)
+
+    low_mean_precursors = create_precursors(lowmean, sr, tone_dur, num_silence = 10)
+    high_mean_precursors = create_precursors(highmean, sr, tone_dur, num_silence = 10)
+    low_variance_precursors = create_precursors(lowvariance, sr, tone_dur, num_silence = 10)
+    high_variance_precursors = create_precursors(highvariance, sr, tone_dur, num_silence = 10)
+
+    for i in range(num_precursors):
+        low_mean_melspec = librosa.feature.melspectrogram(y=low_mean_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        low_mean_logmelspec = np.log(low_mean_melspec + eps)
+
+        high_mean_melspec = librosa.feature.melspectrogram(y=high_mean_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        high_mean_logmelspec = np.log(high_mean_melspec + eps)
+
+        low_variance_melspec = librosa.feature.melspectrogram(y=low_variance_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        low_variance_logmelspec = np.log(low_variance_melspec + eps)
+
+        high_variance_melspec = librosa.feature.melspectrogram(y=high_variance_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        high_variance_logmelspec = np.log(high_variance_melspec + eps)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_low_mean%s_rep_silence10.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(low_mean_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_high_mean%s_rep_silence10.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(high_mean_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_low_variance%s_rep_silence10.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(low_variance_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_high_variance%s_rep_silence10.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(high_variance_logmelspec, f)
+
+
+   # Experiment 3 (Repeated standard 13 times)
+
+    low_mean_precursors = create_precursors(lowmean, sr, tone_dur, num_standard = 13)
+    high_mean_precursors = create_precursors(highmean, sr, tone_dur, num_standard = 13)
+    low_variance_precursors = create_precursors(lowvariance, sr, tone_dur, num_standard = 13)
+    high_variance_precursors = create_precursors(highvariance, sr, tone_dur, num_standard = 13)
+
+    for i in range(num_precursors):
+        low_mean_melspec = librosa.feature.melspectrogram(y=low_mean_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        low_mean_logmelspec = np.log(low_mean_melspec + eps)
+
+        high_mean_melspec = librosa.feature.melspectrogram(y=high_mean_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        high_mean_logmelspec = np.log(high_mean_melspec + eps)
+
+        low_variance_melspec = librosa.feature.melspectrogram(y=low_variance_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        low_variance_logmelspec = np.log(low_variance_melspec + eps)
+
+        high_variance_melspec = librosa.feature.melspectrogram(y=high_variance_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        high_variance_logmelspec = np.log(high_variance_melspec + eps)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_low_mean%s_rep_standard13.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(low_mean_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_high_mean%s_rep_standard13.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(high_mean_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_low_variance%s_rep_standard13.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(low_variance_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_high_variance%s_rep_standard13.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(high_variance_logmelspec, f)
+
+
+   # Experiment 3 (Repeated standard 5 times)
+
+    low_mean_precursors = create_precursors(lowmean, sr, tone_dur, num_standard = 5)
+    high_mean_precursors = create_precursors(highmean, sr, tone_dur, num_standard = 5)
+    low_variance_precursors = create_precursors(lowvariance, sr, tone_dur, num_standard = 5)
+    high_variance_precursors = create_precursors(highvariance, sr, tone_dur, num_standard = 5)
+
+    for i in range(num_precursors):
+        low_mean_melspec = librosa.feature.melspectrogram(y=low_mean_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        low_mean_logmelspec = np.log(low_mean_melspec + eps)
+
+
+        high_mean_melspec = librosa.feature.melspectrogram(y=high_mean_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        high_mean_logmelspec = np.log(high_mean_melspec + eps)
+
+        low_variance_melspec = librosa.feature.melspectrogram(y=low_variance_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        low_variance_logmelspec = np.log(low_variance_melspec + eps)
+
+        high_variance_melspec = librosa.feature.melspectrogram(y=high_variance_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+        high_variance_logmelspec = np.log(high_variance_melspec + eps)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_low_mean%s_rep_standard5.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(low_mean_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_high_mean%s_rep_standard5.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(high_mean_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_low_variance%s_rep_standard5.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(low_variance_logmelspec, f)
+
+        pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'holt_high_variance%s_rep_standard5.pkl'%i
+        with open(pklfile, 'wb') as f:
+            pickle.dump(high_variance_logmelspec, f)
+
+### END ###
+
+    # # Experiment 3 (Repeated standard 13 times)
+
+    # for i in range(num_precursors):
+    #     lowmid_precursors = create_precursors(lowmid, sr, tone_dur, num_standard = 13, num_standard_isi = 13)
+    #     lowmid_melspec = librosa.feature.melspectrogram(y=lowmid_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+    #     lowmid_logmelspec = np.log(lowmid_melspec + eps)
+
+    #     midlow_precursors = create_precursors(midlow, sr, tone_dur, num_standard = 13, num_standard_isi = 13)
+    #     midlow_melspec = librosa.feature.melspectrogram(y=midlow_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+    #     midlow_logmelspec = np.log(midlow_melspec + eps)
+
+    #     highmid_precursors = create_precursors(highmid, sr, tone_dur, num_standard = 13, num_standard_isi = 13)
+    #     highmid_melspec = librosa.feature.melspectrogram(y=highmid_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+    #     highmid_logmelspec = np.log(highmid_melspec + eps)
+
+    #     midhigh_precursors = create_precursors(midhigh, sr, tone_dur, num_standard = 13, num_standard_isi = 13)
+    #     midhigh_melspec = librosa.feature.melspectrogram(y=midhigh_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+    #     midhigh_logmelspec = np.log(midhigh_melspec + eps)
+
+
+    #     pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'lowmid%s_rep_standard13.pkl'%i
+    #     with open(pklfile, 'wb') as f:
+    #         pickle.dump(lowmid_logmelspec, f)
+
+    #     pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'midlow%s_rep_standard13.pkl'%i
+    #     with open(pklfile, 'wb') as f:
+    #         pickle.dump(midlow_logmelspec, f)
+
+    #     pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'highmid%s_rep_standard13.pkl'%i
+    #     with open(pklfile, 'wb') as f:
+    #         pickle.dump(highmid_logmelspec, f)
+
+    #     pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'midhigh%s_rep_standard13.pkl'%i
+    #     with open(pklfile, 'wb') as f:
+    #         pickle.dump(midhigh_logmelspec, f)
+
+
+    # # Experiment 3 (Repeated standard 5 times)
+
+    # for i in range(num_precursors):
+    #     lowmid_precursors = create_precursors(lowmid, sr, tone_dur, num_standard = 5, num_standard_isi = 13)
+    #     lowmid_melspec = librosa.feature.melspectrogram(y=lowmid_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+    #     lowmid_logmelspec = np.log(lowmid_melspec + eps)
+
+    #     midlow_precursors = create_precursors(midlow, sr, tone_dur, num_standard = 5, num_standard_isi = 13)
+    #     midlow_melspec = librosa.feature.melspectrogram(y=midlow_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+    #     midlow_logmelspec = np.log(midlow_melspec + eps)
+
+    #     highmid_precursors = create_precursors(highmid, sr, tone_dur, num_standard = 5, num_standard_isi = 13)
+    #     highmid_melspec = librosa.feature.melspectrogram(y=highmid_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+    #     highmid_logmelspec = np.log(highmid_melspec + eps)
+
+    #     midhigh_precursors = create_precursors(midhigh, sr, tone_dur, num_standard = 5, num_standard_isi = 13)
+    #     midhigh_melspec = librosa.feature.melspectrogram(y=midhigh_precursors[i], sr=sr_target, S=None, n_fft=n_fft, hop_length=hop_length, power=2.0, n_mels=n_mels)
+    #     midhigh_logmelspec = np.log(midhigh_melspec + eps)
+
+
+    #     pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'lowmid%s_rep_standard5.pkl'%i
+    #     with open(pklfile, 'wb') as f:
+    #         pickle.dump(lowmid_logmelspec, f)
+
+    #     pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'midlow%s_rep_standard5.pkl'%i
+    #     with open(pklfile, 'wb') as f:
+    #         pickle.dump(midlow_logmelspec, f)
+
+    #     pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'highmid%s_rep_standard5.pkl'%i
+    #     with open(pklfile, 'wb') as f:
+    #         pickle.dump(highmid_logmelspec, f)
+
+    #     pklfile = './precursors/%s/%smels/'%(padding,n_mels) + 'midhigh%s_rep_standard5.pkl'%i
+    #     with open(pklfile, 'wb') as f:
+    #         pickle.dump(midhigh_logmelspec, f)
+
+

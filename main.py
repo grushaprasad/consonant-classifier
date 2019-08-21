@@ -8,7 +8,7 @@ import data
 import model
 import random
 import re
-
+import glob
 import os
 
 # PARSE ARGUMENTS
@@ -30,10 +30,13 @@ parser.add_argument('--traindir', type=str, default='./data/train.txt',
 parser.add_argument('--testdir', type=str, default='./data/test.txt',
                     help='directory with test spectrograms')
 
+parser.add_argument('--datdir', type=str, default='./csv/',
+                    help='directory with test spectrograms')
+
 parser.add_argument('--testmodel', type=str, default='NA',
                     help='name of pre-trained model you want to test')
 
-parser.add_argument('--adaptor', type=str, default='./precursors/unpadded/20mels/midhigh.pkl',
+parser.add_argument('--adaptor_dir', type=str, default='./precursors/unpadded/20mels/',
                     help='file path of adaptor that will get subtracted from test')
 
 parser.add_argument('--nmels', type=int, default=20,
@@ -54,17 +57,22 @@ parser.add_argument('--epoch_prop', type=float, default=0.8,
 parser.add_argument('--lr', type=float, default=0.005,
                     help='learning rate')
 
-parser.add_argument('--hidden_size', type=int, default=20,
+parser.add_argument('--nhid', type=int, default=20,
                     help='number of hidden units')
 
 parser.add_argument('--ncons', type=int, default=2,
-                    help='number of hidden units')
+                    help='number of consonants')
 
 parser.add_argument('--nvowels', type=int, default=4,
-                    help='number of hidden units')
+                    help='number of vowels')
 
 parser.add_argument('--classification', type=int, default=1,
                     help='combined cons and vowel: 1, split cons and vowel: 0')
+
+
+parser.add_argument('--seed', type=int, default=17,
+                    help='random seed')
+
 
 args = parser.parse_args()
 
@@ -77,7 +85,7 @@ num_classes = 8
 num_epochs = args.epochs
 num_layers = args.nlayers
 batch_size = args.bsz
-hidden_size = args.hidden_size
+hidden_size = args.nhid
 learning_rate = args.lr
 num_cons = args.ncons
 num_vowels = args.nvowels
@@ -87,10 +95,12 @@ num_combined = num_cons*num_vowels
 #sequence_length = 10
 sequence_length = 107
 
-modelname = args.modelpath + 'model' + str(input_size) + '-' + str(learning_rate) + '-' + str(num_epochs) + '-' +  str(num_layers) + '-' + str(hidden_size) + '.pt'
+random.seed(args.seed)
+
+modelname = args.modelpath + 'model' + str(input_size) + '-' + str(learning_rate) + '-' + str(num_epochs) + '-' +  str(num_layers) + '-' + str(hidden_size) + '-' + str(args.seed) + '.pt'
 
 if args.testmodel != 'NA':
-    modelpath = args.testmodel
+    modelpath = args.testmodel 
 else:
     modelpath = modelname
 
@@ -133,7 +143,7 @@ def order_set(seq_lens, dat, cons_labs, vowel_labs, combined_labs, files):
         zipped = zip(list(seq_lens[i]), dat[i], cons_labs[i], vowel_labs[i], combined_labs[i], files[i])
         ordered = reversed(sorted(zipped,  key = lambda x: x[0]))
         seq_lens[i], dat[i], cons_labs[i], vowel_labs[i], combined_labs[i], files[i] = zip(*ordered)
-
+ 
 
 # Device configuration 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -158,7 +168,7 @@ if args.testmodel != 'NA':  #i.e. there is an existing test model
 else:
     # print('hello')
 
-    dat = data.Melspectrogram(args.traindir, args.testdir, args.split_prop, args.split_method, args.adaptor)
+    dat = data.Melspectrogram(args.traindir, args.testdir, args.split_prop, args.split_method, 'NA')
 
     train_data = get_batch(dat.train, batch_size)
     train_cons_labs = get_batch(dat.train_cons_labs, batch_size)
@@ -232,10 +242,20 @@ if args.testmodel == 'NA': #i.e. there isn't a pre-trained model
             grouped = torch.stack(batch)  #combines list of tensors into a dimension
 
             sound = grouped.reshape(batch_size, sequence_length, input_size).to(device)
-            cons_label = torch.LongTensor(train_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
-            vowel_label = torch.LongTensor(train_vowel_labs[i]).to(device)
-            combined_label = torch.LongTensor(train_combined_labs[i]).to(device)
-            seq_len = torch.LongTensor(train_seq_lens[i]).to(device)
+            
+
+            if torch.cuda.is_available():
+                cons_label = torch.cuda.LongTensor(train_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+                vowel_label = torch.cuda.LongTensor(train_vowel_labs[i]).to(device)
+                combined_label = torch.cuda.LongTensor(train_combined_labs[i]).to(device)
+                seq_len = torch.cuda.LongTensor(train_seq_lens[i]).to(device)
+            else:
+                cons_label = torch.LongTensor(train_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+                vowel_label = torch.LongTensor(train_vowel_labs[i]).to(device)
+                combined_label = torch.LongTensor(train_combined_labs[i]).to(device)
+                seq_len = torch.LongTensor(train_seq_lens[i]).to(device)
+
+            
 
             #forward pass
             output = model(sound, seq_len)
@@ -255,7 +275,7 @@ if args.testmodel == 'NA': #i.e. there isn't a pre-trained model
         print ('Epoch [{}/{}], Loss: {:.4f}' .format(epoch+1, num_epochs, loss.item()))
 
 
-    with open(modelname, 'wb') as f:
+    with open(modelpath, 'wb') as f:
         torch.save(model, f)
 
     
@@ -273,10 +293,18 @@ with torch.no_grad():
     for i, batch in enumerate(train_data):
         grouped = torch.stack(batch)
         sound = grouped.reshape(batch_size, sequence_length, input_size).to(device) #change this 1 to batch size if I want to implement batches in the future
-        cons_label = torch.LongTensor(train_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
-        vowel_label = torch.LongTensor(train_vowel_labs[i]).to(device)
-        combined_label = torch.LongTensor(train_combined_labs[i]).to(device)
-        seq_len = torch.LongTensor(train_seq_lens[i]).to(device)
+        
+        if torch.cuda.is_available():
+            cons_label = torch.cuda.LongTensor(train_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+            vowel_label = torch.cuda.LongTensor(train_vowel_labs[i]).to(device)
+            combined_label = torch.cuda.LongTensor(train_combined_labs[i]).to(device)
+            seq_len = torch.cuda.LongTensor(train_seq_lens[i]).to(device)
+        else:
+            cons_label = torch.LongTensor(train_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+            vowel_label = torch.LongTensor(train_vowel_labs[i]).to(device)
+            combined_label = torch.LongTensor(train_combined_labs[i]).to(device)
+            seq_len = torch.LongTensor(train_seq_lens[i]).to(device)
+
         
         output = model(sound, seq_len)
 
@@ -312,10 +340,16 @@ with torch.no_grad():
     for i, batch in enumerate(val_data):
         grouped = torch.stack(batch)
         sound = grouped.reshape(batch_size, sequence_length, input_size).to(device) #change this 1 to batch size if I want to implement batches in the future
-        cons_label = torch.LongTensor(val_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
-        vowel_label = torch.LongTensor(val_vowel_labs[i]).to(device)
-        combined_label = torch.LongTensor(val_combined_labs[i]).to(device)
-        seq_len = torch.LongTensor(val_seq_lens[i]).to(device)
+        if torch.cuda.is_available():
+            cons_label = torch.cuda.LongTensor(val_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+            vowel_label = torch.cuda.LongTensor(val_vowel_labs[i]).to(device)
+            combined_label = torch.cuda.LongTensor(val_combined_labs[i]).to(device)
+            seq_len = torch.cuda.LongTensor(val_seq_lens[i]).to(device)
+        else:
+            cons_label = torch.LongTensor(val_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+            vowel_label = torch.LongTensor(val_vowel_labs[i]).to(device)
+            combined_label = torch.LongTensor(val_combined_labs[i]).to(device)
+            seq_len = torch.LongTensor(val_seq_lens[i]).to(device)
         
         output = model(sound, seq_len)
 
@@ -352,11 +386,19 @@ with torch.no_grad():
 
     for i, batch in enumerate(test_data):
         grouped = torch.stack(batch)
-        sound = grouped.reshape(batch_size, sequence_length, input_size).to(device) #change this 1 to batch size if I want to implement batches in the future
-        cons_label = torch.LongTensor(test_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
-        vowel_label = torch.LongTensor(test_vowel_labs[i]).to(device)
-        combined_label = torch.LongTensor(test_combined_labs[i]).to(device)
-        seq_len = torch.LongTensor(test_seq_lens[i]).to(device)
+        sound = grouped.reshape(batch_size, sequence_length, input_size).to(device) 
+        
+        if torch.cuda.is_available():
+            cons_label = torch.cuda.LongTensor(test_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+            vowel_label = torch.cuda.LongTensor(test_vowel_labs[i]).to(device)
+            combined_label = torch.cuda.LongTensor(test_combined_labs[i]).to(device)
+            seq_len = torch.cuda.LongTensor(test_seq_lens[i]).to(device)
+        else:
+            cons_label = torch.LongTensor(test_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+            vowel_label = torch.LongTensor(test_vowel_labs[i]).to(device)
+            combined_label = torch.LongTensor(test_combined_labs[i]).to(device)
+            seq_len = torch.LongTensor(test_seq_lens[i]).to(device)
+
         
         output = model(sound, seq_len)
         filenum = [int(re.findall('\d+', x)[0]) for x in test_filenames[i]]
@@ -378,12 +420,14 @@ with torch.no_grad():
             filename_dict[filename[i]] = round(float(p[1].item()), 3) #change to p[0] for % D
 
 
-    dat_path = './csv/%s/'%os.path.basename(modelname)
+    dat_path = '%s%s/'%(args.datdir,args.classification)
+    print(modelpath)
+    print(dat_path)
 
     if not os.path.exists(dat_path):
-        os.mkdir(dat_path)
+        os.makedirs(dat_path)
 
-    with open('%spre_subtraction.csv'%dat_path, 'w') as f:
+    with open('%s%s_pre.csv'%(dat_path,os.path.basename(modelpath)[:-3]), 'w') as f:
         f.write('fname, filenum, vowel, adaptor, prob_G \n')
         for key in filename_dict:
             filenum = int(re.findall('\d+', key)[0])
@@ -401,16 +445,20 @@ with torch.no_grad():
     #     print('%s: %s'%(key,filename_dict[key]))
 
 
-
-
 # Test on continuum after subtraction
-print('TESTING AFTER SUBTRACTION')
-adaptor_list = ['./precursors/unpadded/20mels/midhigh.pkl', './precursors/unpadded/20mels/highmid.pkl', './precursors/unpadded/20mels/midlow.pkl', './precursors/unpadded/20mels/lowmid.pkl']
+#print('TESTING AFTER SUBTRACTION')
+# adaptor_list = ['./precursors/unpadded/20mels/midhigh.pkl',
+#     './precursors/unpadded/20mels/highmid.pkl',
+#     './precursors/unpadded/20mels/midlow.pkl', 
+#     './precursors/unpadded/20mels/lowmid.pkl']
 
-with open('%spost_subtraction.csv'%dat_path, 'w') as f:
+adaptor_list = glob.glob(args.adaptor_dir+'*.pkl')
+
+with open('%s%s_post.csv'%(dat_path,os.path.basename(modelpath)[:-3]), 'w') as f:
     f.write('fname, filenum, vowel, adaptor, prob_G \n')
 
     for adaptor in adaptor_list:
+        print(adaptor)
         with torch.no_grad():
             dat = data.Melspectrogram(args.traindir, args.testdir, args.split_prop, args.split_method, adaptor)
 
@@ -431,11 +479,18 @@ with open('%spost_subtraction.csv'%dat_path, 'w') as f:
 
             for i, batch in enumerate(subtracted_test_data):
                 grouped = torch.stack(batch)
-                sound = grouped.reshape(batch_size, sequence_length, input_size).to(device) #change this 1 to batch size if I want to implement batches in the future
-                cons_label = torch.LongTensor(subtracted_test_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
-                vowel_label = torch.LongTensor(subtracted_test_vowel_labs[i]).to(device)
-                combined_label = torch.LongTensor(subtracted_test_combined_labs[i]).to(device)
-                seq_len = torch.LongTensor(subtracted_test_seq_lens[i]).to(device)
+                sound = grouped.reshape(batch_size, sequence_length, input_size).to(device) 
+
+                if torch.cuda.is_available():
+                    cons_label = torch.cuda.LongTensor(subtracted_test_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+                    vowel_label = torch.cuda.LongTensor(subtracted_test_vowel_labs[i]).to(device)
+                    combined_label = torch.cuda.LongTensor(subtracted_test_combined_labs[i]).to(device)
+                    seq_len = torch.cuda.LongTensor(subtracted_test_seq_lens[i]).to(device)
+                else:
+                    cons_label = torch.LongTensor(subtracted_test_cons_labs[i]).to(device)  #labels need to be a tensor of tensors
+                    vowel_label = torch.LongTensor(subtracted_test_vowel_labs[i]).to(device)
+                    combined_label = torch.LongTensor(subtracted_test_combined_labs[i]).to(device)
+                    seq_len = torch.LongTensor(subtracted_test_seq_lens[i]).to(device)
                 
                 output = model(sound, seq_len)
                 filenum = [int(re.findall('\d+', x)[0]) for x in subtracted_test_filenames[i]]
